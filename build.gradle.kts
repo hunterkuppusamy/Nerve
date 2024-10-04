@@ -1,10 +1,9 @@
+import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    kotlin("jvm") version "2.0.20"
-    id("java")
-    id("io.github.goooler.shadow") version "8.1.2"
-    id("maven-publish")
+    kotlin("multiplatform") version "2.0.20"
+
     `maven-publish`
 }
 
@@ -15,50 +14,45 @@ repositories {
     mavenCentral()
 }
 
-dependencies {
-    api(kotlin("reflect"))
-    api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.3.9")
+kotlin {
+    jvm()
+    linuxX64()
+    mingwX64()
 
-    testImplementation(kotlin("test"))
-}
+    sourceSets {
+        val desktopMain by getting
 
-sourceSets {
-    val main by getting {
-        kotlin.srcDir("src/main/kotlin")
-        resources.srcDir("src/main/resources")
-    }
-    val test by getting {
-        kotlin.srcDir("src/test/kotlin")
-        resources.srcDir("src/test/resources")
+        commonMain.dependencies {
+            implementation(compose.runtime)
+            implementation(compose.foundation)
+            implementation(compose.material)
+            implementation(compose.ui)
+            implementation(compose.components.resources)
+            implementation(compose.components.uiToolingPreview)
+            implementation(libs.androidx.lifecycle.viewmodel)
+            implementation(libs.androidx.lifecycle.runtime.compose)
+        }
+        desktopMain.dependencies {
+            implementation(compose.desktop.currentOs)
+            implementation(libs.kotlinx.coroutines.swing)
+        }
+        val commonMain by getting {
+            dependencies {
+                //put your multiplatform dependencies here
+                implementation(kotlin("stdlib"))
+                implementation(kotlin("reflect"))
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+            }
+        }
+        val commonTest by getting {
+            dependencies {
+
+            }
+        }
     }
 }
 
 tasks {
-    test {
-        useJUnitPlatform()
-    }
-    compileJava {
-        options.release = 21
-        options.encoding = "UTF-8"
-    }
-    compileKotlin {
-        compilerOptions.jvmTarget.set(JvmTarget.JVM_21)
-    }
-
-    shadowJar {
-        archiveFileName = "Nerve-${project.version}.jar"
-        // from(sourceSets.main.get().output)
-        minimize {
-            exclude("kotlin/")
-            exclude(dependency("org.jetbrains.kotlin:kotlin-stdlib"))
-            exclude(dependency("org.jetbrains.kotlin:kotlin-reflect"))
-        }
-        minimize()
-    }
-
-    assemble {
-        dependsOn(shadowJar)
-    }
 
     register("listComponents") {
         doLast {
@@ -101,8 +95,4 @@ tasks {
             }
         }
     }
-}
-
-kotlin {
-    jvmToolchain(21)
 }
