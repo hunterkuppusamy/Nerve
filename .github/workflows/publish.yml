@@ -1,19 +1,36 @@
 name: Publish package to GitHub Packages
+
 on: 
   - push
+  
 jobs:
   publish:
+
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-      - name: Publish package
-        run: mvn --batch-mode deploy
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # for commit count command line in gradle
+    - run: git checkout production
+    - name: install jdk 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        server-id: github # Value of the distributionManagement/repository/id field of the pom.xml
+        settings-path: ${{ github.workspace }} # location for the settings.xml file
+
+    - name: setup gradle
+      uses: gradle/actions@v4.1.0
+    - name: build project
+      working-directory: ./Nerve
+      run: gradle build
+    - name: publish
+      working-directory: ./Nerve
+      run: gradle publish --info
+      env:
+        TOKEN: ${{ GITHUB_TOKEN }}
+    - run: |
+        echo "COMMIT_COUNT=$(git rev-list --count production)" >> $GITHUB_ENV
+        echo ${{ env.COMMIT_COUNT }}
