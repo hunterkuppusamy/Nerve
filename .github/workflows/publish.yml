@@ -26,10 +26,11 @@ jobs:
         server-id: github # Value of the distributionManagement/repository/id field of the pom.xml
         settings-path: ${{ github.workspace }} # location for the settings.xml file
 
-    - name: setup gradle
-      uses: github/actions/setup-gradle@v4.1.0
-    - name: build project
-      working-directory: ./Nerve
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: "8.10"
+    - name: Build with Gradle
       run: gradle build
     - name: publish
       working-directory: ./Nerve
