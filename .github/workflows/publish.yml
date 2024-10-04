@@ -30,7 +30,7 @@ jobs:
       working-directory: ./Nerve
       run: gradle publish --info
       env:
-        TOKEN: ${{ GITHUB_TOKEN }}
+        TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - run: |
         echo "COMMIT_COUNT=$(git rev-list --count production)" >> $GITHUB_ENV
         echo ${{ env.COMMIT_COUNT }}
