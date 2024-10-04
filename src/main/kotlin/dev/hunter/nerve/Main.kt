@@ -12,11 +12,16 @@ object Nerve{
     fun setProperties(properties: NerveProperties){
         props = properties
     }
-    fun run(line: String){
+
+    private fun run0(line: String){
         val tokens = Tokenizer(CharBuffer.wrap(line)).tokenize()
         val nodes = Parser(tokens).parse()
         val execute = Interpreter()
         execute.interpret(nodes)
+    }
+
+    fun run(line: String){
+        run0(line)
     }
 }
 

@@ -7,6 +7,7 @@ class Interpreter {
         for (node in nodes){
             global.interpret(node)
         }
+        println("Time taken = ${global.time}ms")
     }
 }
 

@@ -1,6 +1,6 @@
 package dev.hunter.nerve
 
-import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.TimeUnit
 import kotlin.math.pow
 
 @Suppress("MemberVisibilityCanBePrivate")
@@ -28,12 +28,14 @@ abstract class ExecutionScope{
     /**
      * Total execution time in ms
      */
-    private val _tms = AtomicLong()
+    open var time: Long get() = global.time
+        set(value) { global.time = value }
 
     /**
      * Interpret a [Node]
      */
     fun interpret(node: Node){
+        val start = System.nanoTime()
         when (node){
             is OfValue -> computeValuable(node)
             is VariableAssignment -> {
@@ -43,6 +45,7 @@ abstract class ExecutionScope{
                 functions[node.function.value] = node
             }
         }
+        time += TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start)
     }
 
     private fun computeFunctionArguments(function: FunctionInvoke): List<Any?> {
@@ -152,6 +155,7 @@ class GlobalExecutionScope(
     override val variables: HashMap<String, Any?> = HashMap()
     override val functions: HashMap<String, Function> = HashMap()
     override val global: GlobalExecutionScope = this
+    override var time: Long = 0
     init {
         functions.putAll(BuiltInFunctions.entries.associateBy { it.name.lowercase() })
         variables.putAll(initialVars)
