@@ -23,7 +23,7 @@ jobs:
         settings-path: ${{ github.workspace }} # location for the settings.xml file
 
     - name: setup gradle
-      uses: gradle/actions@v4.1.0
+      uses: actions/setup-gradle@v4.1.0
     - name: build project
       working-directory: ./Nerve
       run: gradle build
