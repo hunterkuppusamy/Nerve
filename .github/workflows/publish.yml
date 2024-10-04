@@ -9,7 +9,11 @@ jobs:
   publish:
 
     runs-on: ubuntu-latest
-
+    
+    permissions:
+      contents: read
+      packages: write
+      
     steps:
     - uses: actions/checkout@v4
       with:
@@ -23,7 +27,7 @@ jobs:
         settings-path: ${{ github.workspace }} # location for the settings.xml file
 
     - name: setup gradle
-      uses: actions/setup-gradle@v4.1.0
+      uses: github/actions/setup-gradle@v4.1.0
     - name: build project
       working-directory: ./Nerve
       run: gradle build
