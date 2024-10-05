@@ -1,17 +1,18 @@
-import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 
 plugins {
-    kotlin("multiplatform") version "2.0.20"
-
+    alias(libs.plugins.kotlinMultiplatform)
+    alias(libs.plugins.jetbrainsCompose)
+    alias(libs.plugins.compose.compiler)
     `maven-publish`
 }
 
-group = "dev.hunter"
+group = "dev.hunter.nerve"
 version = "0.0.1"
 
 repositories {
     mavenCentral()
+    google()
 }
 
 kotlin {
@@ -20,47 +21,46 @@ kotlin {
     mingwX64()
 
     sourceSets {
-        val desktopMain by getting
-
-        commonMain.dependencies {
-            implementation(compose.runtime)
-            implementation(compose.foundation)
-            implementation(compose.material)
-            implementation(compose.ui)
-            implementation(compose.components.resources)
-            implementation(compose.components.uiToolingPreview)
-            implementation(libs.androidx.lifecycle.viewmodel)
-            implementation(libs.androidx.lifecycle.runtime.compose)
-        }
-        desktopMain.dependencies {
-            implementation(compose.desktop.currentOs)
-            implementation(libs.kotlinx.coroutines.swing)
-        }
-        val commonMain by getting {
+        commonMain {
             dependencies {
-                //put your multiplatform dependencies here
-                implementation(kotlin("stdlib"))
-                implementation(kotlin("reflect"))
-                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+                implementation(compose.foundation)
+                implementation(libs.kotlinx.coroutines.core)
             }
         }
-        val commonTest by getting {
+
+        jvmMain {
             dependencies {
 
+            }
+        }
+
+        linuxMain {
+            dependencies {
+                implementation(compose.desktop.linux_x64)
+            }
+        }
+
+        mingwMain {
+            dependencies {
+                implementation(compose.desktop.windows_x64)
             }
         }
     }
 }
 
-tasks {
+compose.desktop {
+    application {
+        mainClass = "dev.hunter.nerve.MainKt"
 
-    register("listComponents") {
-        doLast {
-            println("Available components:")
-            components.get().report()
+        nativeDistributions {
+            targetFormats(TargetFormat.Exe, TargetFormat.Deb)
+            packageName = "dev.hunter.nerve"
+            packageVersion = "0.0.1"
         }
     }
+}
 
+tasks {
     publish {
         publishing {
             repositories {

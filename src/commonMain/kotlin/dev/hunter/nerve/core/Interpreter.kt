@@ -1,6 +1,6 @@
 package dev.hunter.nerve.core
 
-import dev.hunter.nerve.info
+import dev.hunter.nerve.logger
 
 class Interpreter(
     vararg initialVars: Pair<String, Any?>,
@@ -29,7 +29,7 @@ enum class BuiltInFunctions(val m: (ExecutionScope, List<Any?>) -> Any?): Functi
         if (args.size > 1) throw RuntimeException("Print has 1 argument, a string")
         val str = args[0]
         val ret = if (str is OfValue) scope.computeValuable(str).toString() else str.toString()
-        info.info("Script: $ret")
+        logger.info("Script: $ret")
     });
 
     override fun invoke(parentScope: ExecutionScope, args: List<Any?>): Any? {

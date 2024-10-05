@@ -1,4 +1,8 @@
 package dev.hunter.nerve
 
-actual val platform: Platform
-    get() = TODO("Not yet implemented")
+actual val platform: Platform = object: Platform {
+    override val name: String
+        get() = TODO("Not yet implemented")
+    override val logger: Logger
+        get() = TODO("Not yet implemented")
+}
