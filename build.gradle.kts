@@ -23,6 +23,12 @@ kotlin {
     sourceSets {
         commonMain {
             dependencies {
+                implementation(compose.runtime)
+                implementation(compose.material)
+                implementation(compose.desktop.common)
+                implementation(compose.ui)
+                implementation(compose.uiUtil)
+                implementation(compose.uiTooling)
                 implementation(compose.foundation)
                 implementation(libs.kotlinx.coroutines.core)
             }
@@ -30,7 +36,7 @@ kotlin {
 
         jvmMain {
             dependencies {
-
+                implementation(compose.desktop.currentOs)
             }
         }
 
@@ -53,9 +59,10 @@ compose.desktop {
         mainClass = "dev.hunter.nerve.MainKt"
 
         nativeDistributions {
-            targetFormats(TargetFormat.Exe, TargetFormat.Deb)
+            targetFormats(TargetFormat.Exe, TargetFormat.AppImage, TargetFormat.Rpm)
             packageName = "dev.hunter.nerve"
             packageVersion = "0.0.1"
+            includeAllModules = true
         }
     }
 }
