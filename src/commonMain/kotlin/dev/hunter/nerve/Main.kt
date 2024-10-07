@@ -5,15 +5,40 @@ import dev.hunter.nerve.core.Parser
 import dev.hunter.nerve.core.Tokenizer
 
 fun main() {
-    platform.entry()
     val tok = Tokenizer("""
-        fun helloWorld(arg){ 
-            print('{arg}') 
+        fun coolPrint(thing) {
+            print('cool print: {thing}')
+            return thing
         }
+        
+        fun helloWorld(arg){ 
+            if (arg == 1) {
+                print("arg = 1!")
+                if (true) {
+                    print("this should be logged")
+                }
+            } 
+            print('argument = {coolPrint(arg + 1} !!') 
+        }
+        
         helloWorld(1)
-        """.trimIndent().toCharArray()).tokenize()
+        
+        x = 52
+        
+        y = 1 - 5 + x
+        
+        print( y )
+        
+    """.trimIndent().toCharArray()).tokenize()
     val nodes = Parser(tok).parse()
-    val it = Interpreter().interpret(nodes)
+    println(nodes)
+    val it = Interpreter(
+        logMethod = {
+             logger.info(it)
+        }
+    )
+    it.interpret(nodes)
+    // platform.entry()
 }
 
 interface Platform {

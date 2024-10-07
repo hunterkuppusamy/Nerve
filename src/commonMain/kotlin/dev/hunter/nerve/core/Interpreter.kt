@@ -3,10 +3,17 @@ package dev.hunter.nerve.core
 import dev.hunter.nerve.logger
 
 class Interpreter(
-    vararg initialVars: Pair<String, Any?>,
-    debug: Boolean = false
+    val logMethod: (String) -> Unit = { println(it) },
+    var debug: Boolean = false,
+    val initialVars: Map<String, Any?>
 ) {
-    private val global = GlobalExecutionScope(*initialVars, debug = debug)
+    constructor(
+        logMethod: (String) -> Unit = { println(it) },
+        debug: Boolean = false,
+        vararg initialVars: Pair<String, Any?>
+    ) : this(logMethod, debug, initialVars.toMap())
+
+    private val global = GlobalExecutionScope(this)
 
     val time get() = global.time
 
@@ -29,7 +36,7 @@ enum class BuiltInFunctions(val m: (ExecutionScope, List<Any?>) -> Any?): Functi
         if (args.size > 1) throw RuntimeException("Print has 1 argument, a string")
         val str = args[0]
         val ret = if (str is OfValue) scope.computeValuable(str).toString() else str.toString()
-        logger.info("Script: $ret")
+        scope.interpreter.logMethod("Script: $ret")
     });
 
     override fun invoke(parentScope: ExecutionScope, args: List<Any?>): Any? {

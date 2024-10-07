@@ -56,7 +56,21 @@ open class Tokenizer(
             '*' -> tokens.add(Token.Operator(line, OperatorKind.MULTIPLY))
             '^' -> tokens.add(Token.Operator(line, OperatorKind.POWER))
             '/' -> tokens.add(Token.Operator(line, OperatorKind.DIVIDE))
-            '=' -> tokens.add(Token.Equals(line))
+            '!' -> {
+                val next = buf.peek()
+                if (next == '=') {
+                    buf.consume()
+                    tokens.add(Token.Operator(line, OperatorKind.INEQUALITY))
+                } else throwTokenException("Unexpected exclamation point")
+            }
+            '=' -> {
+                val next = buf.peek()
+                if (next == '=') {
+                    buf.consume()
+                    tokens.add(Token.Operator(line, OperatorKind.EQUALITY))
+                }
+                else tokens.add(Token.Equals(line))
+            }
             else -> throwTokenException("Unhandled character $c")
         }
     }
@@ -85,8 +99,7 @@ open class Tokenizer(
 
     private fun lexString(first: Char) {
         var isTemplate = false
-        val templateTokens = ArrayList<Array<Token>>()
-        val templateString = ArrayList<String>()
+        val template = ArrayList<Any>()
         while(buf.hasRemaining()) {
             val c = buf.consume()
             if (c == first) break
@@ -94,7 +107,7 @@ open class Tokenizer(
                 isTemplate = true
                 val literal = literalBuffer.toString()
                 literalBuffer.clear()
-                templateString.add(literal)
+                if (literal.isNotBlank()) template.add(Token.StringLiteral(line, literal))
                 val chars = CharBuilder()
                 do {
                     val t = buf.consume()
@@ -103,7 +116,7 @@ open class Tokenizer(
                 } while (buf.hasRemaining())
                 val charsInside = chars.toString() // everything inside the template
                 val tokens = StringTemplateTokenizer(this, charsInside).tokenize()
-                templateTokens.add(tokens)
+                template.add(tokens)
             } else literalBuffer.append(c)
         }
         val literal = literalBuffer.toString()
@@ -111,7 +124,10 @@ open class Tokenizer(
         if (!isTemplate) {
             tokens.add(Token.StringLiteral(line, literal))
         } else {
-            tokens.add(Token.TemplateStringLiteral(line, templateString.toTypedArray(), templateTokens.toTypedArray()))
+            if (literal.isNotBlank())
+                template.add(Token.StringLiteral(line, literal))
+            println("Token is $template")
+            tokens.add(Token.TemplateStringLiteral(line, template.toTypedArray()))
         }
     }
 
@@ -140,6 +156,13 @@ open class Tokenizer(
         }
         val ident = literalBuffer.toString()
         literalBuffer.clear()
+        if (ident == "false") {
+            tokens.add(Token.BooleanLiteral(line, false))
+            return
+        } else if (ident == "true") {
+            tokens.add(Token.BooleanLiteral(line, true))
+            return
+        }
         val keyword = KeywordKind.entries.firstOrNull { it.str == ident }
         val token =
             if (keyword != null) Token.Keyword(line, keyword)
@@ -192,9 +215,8 @@ sealed class Token {
     ): Token(), Constant { override fun toString(): String = "'$value'" }
     class TemplateStringLiteral(
         override val line: Int,
-        val value: Array<String>,
-        val templates: Array<Array<Token>>
-    ): Token(), OfValue { override fun toString(): String = "TemplateStringLiteral[${value.contentDeepToString()}, ${templates.contentDeepToString()}]" }
+        val tokens: Array<Any> // i know this is really ugly but its easy
+    ): Token(), OfValue { override fun toString(): String = "TemplateStringLiteral[${tokens.contentDeepToString()}]" }
     data class Keyword(
         override val line: Int,
         val kind: KeywordKind
@@ -206,6 +228,10 @@ sealed class Token {
     data class FloatingLiteral(
         override val line: Int,
         override val value: Double
+    ): Token(), Constant { override fun toString(): String = "$value" }
+    data class BooleanLiteral(
+        override val line: Int,
+        override val value: Boolean
     ): Token(), Constant { override fun toString(): String = "$value" }
     data class Separator(
         override val line: Int,
@@ -249,6 +275,8 @@ enum class KeywordKind{
     WHILE,
     DO,
     RETURN,
+    BREAK,
+    CONTINUE,
     FUN;
 
     val str: String = this.name.lowercase()

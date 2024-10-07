@@ -2,6 +2,7 @@ package dev.hunter.nerve.core
 
 import dev.hunter.nerve.debugLog
 import kotlin.math.pow
+import kotlin.time.Duration
 import kotlin.time.measureTime
 
 @Suppress("MemberVisibilityCanBePrivate")
@@ -26,6 +27,8 @@ abstract class ExecutionScope{
      */
     abstract val debug: Boolean
 
+    open val interpreter: Interpreter get() = global.interpreter
+
     /**
      * Total execution time in ms
      */
@@ -45,6 +48,16 @@ abstract class ExecutionScope{
                 is FunctionDefinition -> {
                     functions[node.function.value] = node
                 }
+                is IfStatement -> {
+                    val run = computeValuable(node.operand)
+                    val bool = run as? Boolean
+                    if (bool == true) {
+                        for (line in node.body) {
+                            if (line is BreakStatement) break
+                            interpret(line)
+                        }
+                    }
+                }
             }
         }
         val elapsed = start.inWholeMicroseconds / 1000.0
@@ -62,24 +75,12 @@ abstract class ExecutionScope{
             is BinaryExpression -> computeBinaryExpression(node)
             is TemplateString -> {
                 val i = node.line.iterator()
-                val temps = node.templates
-                val chars = CharBuilder()
+                var str = ""
                 while (i.hasNext()) {
-                    val c = i.next()
-                    if (c == TEMPLATE_START_CHAR){
-                        val intC = CharBuilder()
-                        while(i.hasNext()) {
-                            val n = i.next()
-                            if (n == TEMPLATE_END_CHAR) break
-                            intC.append(n)
-                        }
-                        val int = intC.toString().toInt()
-                        val temp = temps[int]
-                        val replace = computeValuable(temp)
-                        chars.append(replace.toString())
-                    } else chars.append(c)
+                    val value = i.next()
+                    str += computeValuable(value)
                 }
-                chars.toString()
+                str
             }
             else -> throw RuntimeException("Unhandled valuable expression $node")
         }
@@ -118,6 +119,22 @@ abstract class ExecutionScope{
                     left.toDouble().pow(right.toDouble())
                 } else throw RuntimeException("Binary operands $left or $right is not a number")
             }
+            OperatorKind.EQUALITY -> {
+                return left == right
+            }
+            OperatorKind.MOD -> {
+                return if (left is Number && right is Number) {
+                    left.toDouble().mod(right.toDouble())
+                }else throw RuntimeException("Binary operands $left or $right is not a number")
+            }
+            OperatorKind.LESS_THAN -> {
+                return if (left is Comparable<*> && right is Comparable<*>) {
+                    (left as Comparable<Any>).compareTo(right)
+                }else throw RuntimeException("Binary operands $left or $right is not a number")
+            }
+            OperatorKind.INEQUALITY -> {
+                return left != right
+            }
             else -> throw RuntimeException("Unhandled operator $op")
         }
     }
@@ -150,20 +167,19 @@ abstract class ExecutionScope{
 }
 
 class GlobalExecutionScope(
-    initialVars: Map<String, Any?>,
-    override val debug: Boolean = false
+    override val interpreter: Interpreter
 ) : ExecutionScope() {
-    constructor(vararg initial: Pair<String, Any?>, debug: Boolean = false): this(initial.toMap(), debug)
     override val variables: HashMap<String, Any?> = HashMap()
     override val functions: HashMap<String, Function> = HashMap()
     override val global: GlobalExecutionScope = this
     override var time: Double = 0.0
+    override val debug: Boolean get() = interpreter.debug
     init {
         functions.putAll(BuiltInFunctions.entries.associateBy { it.name.lowercase() })
         if (debug) {
-            debugLog.info("Starting with initial vars: $initialVars")
+            debugLog.info("Starting with initial vars: ${interpreter.initialVars}")
         }
-        variables.putAll(initialVars)
+        variables.putAll(interpreter.initialVars)
     }
 }
 

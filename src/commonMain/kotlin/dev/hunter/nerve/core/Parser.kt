@@ -17,7 +17,7 @@ class Parser(
         return ret
     }
 
-    /**
+    /*
      * Parses the [tokens] into a collection of [nodes][Node].
      *
      * These nodes make up the hierarchy that is the syntax of my language.
@@ -64,7 +64,7 @@ class Parser(
                                 val params = ArrayList<OfValue>()
                                 do {
                                     if (current == null || current is Token.Separator) break
-                                    val thing = parseStatement()
+                                    val thing = parseExpression()
                                     if (thing !is OfValue) throwParseException("Expected yielding expression for function argument")
                                     params.add(thing)
                                 } while (true)
@@ -94,24 +94,23 @@ class Parser(
                             right = current
                         }
                         consume() // right paren
-                        val left = consume()
-                        if (left !is Token.Separator || left.kind != SeparatorKind.LEFT_BRACE) throwParseException("Expected left brace for body of function: $entry")
-                        val body = ArrayList<Node>()
-                        do {
-                            val next = current
-                            // handle empty function body
-                            if (next is Token.Separator && next.kind == SeparatorKind.RIGHT_BRACE) break
-                            val line = parseStatement()
-                            body.add(line)
-                        } while (current !is Token.Separator)
-                        consume() // right brace
-                        return FunctionDefinition(identifier, params, body)
+                        return FunctionDefinition(identifier, params, parseBody("function ${identifier.value} at line ${identifier.line}"))
                     }
                     KeywordKind.RETURN -> {
                         consume() // return
                         val value = parseExpression()
                         if (value !is OfValue) throwParseException("Expected some value after return")
                         return ReturnFunction(value)
+                    }
+                    KeywordKind.IF -> {
+                        consume() // if
+                        val left = consume()
+                        if (left !is Token.Separator || left.kind != SeparatorKind.LEFT_PAREN) throwParseException("Expected left paren to start IF expression")
+                        val operand = parseExpression()
+                        val right = consume()
+                        // if (right !is Token.Separator || right.kind != SeparatorKind.RIGHT_PAREN) throwParseException("Expected right paren to end IF expression")
+                        if (operand !is OfValue) throwParseException("Expected condition to return true or false")
+                        return IfStatement(operand, parseBody("If statement at line #${entry.line}"))
                     }
                     else -> throwParseException("Unhandled keyword: $entry")
                 }
@@ -121,12 +120,27 @@ class Parser(
         }
     }
 
+    private fun parseBody(function: String): List<Node> {
+        val left = consume()
+        if (left !is Token.Separator || left.kind != SeparatorKind.LEFT_BRACE) throwParseException("Expected left brace to start body: $function")
+        val body = ArrayList<Node>()
+        do {
+            val next = current
+            // handle empty function body
+            if (next is Token.Separator && next.kind == SeparatorKind.RIGHT_BRACE) break
+            val line = parseStatement()
+            body.add(line)
+        } while (current !is Token.Separator)
+        consume() // right brace
+        return body
+    }
+
     private fun parseExpression(): Node {
         var left = parseTerm()
 
         while (true) {
             val token = current
-            if (token is Token.Operator && (token.kind == OperatorKind.ADD || token.kind == OperatorKind.SUBTRACT)) {
+            if (token is Token.Operator) {
                 consume() // Consume the operator
                 val right = parseTerm()
                 if (right !is OfValue) throwParseException("Right side of expression does not yield a result")
@@ -162,22 +176,23 @@ class Parser(
             is Token.TemplateStringLiteral -> {
                 consume() // template
                 val values = ArrayList<OfValue>()
-                for (arr in token.templates) {
-                    val node = Parser(arr, debug).parseExpression()
-                    if (node !is OfValue) throwParseException("Expression in string template does not have a value: $node")
-                    values.add(node)
+                for (piece in token.tokens) {
+                    when (piece) {
+                        is Array<*> -> {
+                            val node = Parser(
+                                piece as? Array<Token>
+                                    ?: throw IllegalStateException("Somehow there is an array of something other than tokens: ${piece::class.simpleName}"),
+                                debug
+                            ).parseExpression()
+                            if (node !is OfValue) throwParseException("Expression in string template does not have a value: $node")
+                            values.add(node)
+                        }
+                        is OfValue -> values.add(piece)
+                        // is String -> values.add(Token.StringLiteral(token.line, piece))
+                        else -> throw IllegalArgumentException("arr = [$piece] : ${piece::class.simpleName}")
+                    }
                 }
-                var str = ""
-                var n = 0
-                for (sect in token.value){
-                    str += sect
-                    str += "{$n}"
-                    n++
-                }
-                for (left in token.value.slice(n..<token.value.size)){
-                    str += left
-                }
-                TemplateString(str, values)
+                TemplateString(values)
             }
             is Constant -> {
                 consume()
@@ -189,8 +204,16 @@ class Parser(
                     is Token.Separator -> {
                         when (next.kind) {
                             SeparatorKind.LEFT_PAREN -> {
-                                consume() // separator
-                                parseValuable() // this might be wrong, as it seems to just grab the deepest constant and bring it up
+                                consume() // left paren
+                                val params = ArrayList<OfValue>()
+                                do {
+                                    if (current == null || current is Token.Separator) break
+                                    val thing = parseExpression()
+                                    if (thing !is OfValue) throwParseException("Expected yielding expression for function argument")
+                                    params.add(thing)
+                                } while (true)
+                                consume() // right paren
+                                return FunctionInvoke(token, params)
                             }
                             else -> token
                         }
@@ -203,10 +226,20 @@ class Parser(
     }
 
     private fun throwParseException(msg: String): Nothing {
-        // println(tokens.contentDeepToString())
+        println(tokens.contentDeepToString())
         println(nodes)
-        throw ParseException("#${current?.line} -> $msg")
+        throw ParseException("At line #${current?.line} -> $msg")
     }
+}
+
+class ParseTree(
+
+)
+
+interface ParseTreeBuilder {
+    fun addCond(f: (Token) -> Boolean): ParseTreeBuilder
+    fun addResult(f: (Token) -> Any): ParseTreeBuilder
+    fun build(): ParseTree
 }
 
 /**
@@ -240,8 +273,7 @@ data class FunctionInvoke(
 ): Node, OfValue
 
 data class TemplateString(
-    val line: String,
-    val templates: List<OfValue>
+    val line: List<OfValue>
 ): Node, OfValue
 
 /**
@@ -281,6 +313,11 @@ data class VariableAssignment(
     val expression: OfValue
 ): Node
 
+data class IfStatement(
+    val operand: OfValue, // should be a value of true or false, if not then not null
+    val body: List<Node>
+): Node
+
 /**
  * A [Node] that describes the returning of some value in a function.
  *
@@ -289,5 +326,7 @@ data class VariableAssignment(
 data class ReturnFunction(
     val variable: OfValue
 ): Node
+
+object BreakStatement: Node
 
 class ParseException(message: String) : Exception(message)
