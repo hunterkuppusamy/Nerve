@@ -6,6 +6,14 @@ import dev.hunter.nerve.core.Tokenizer
 
 fun main() {
     val tok = Tokenizer("""
+        fun concat(string1, string2){
+            print('{string1} + {string2}')
+        }
+        
+        hello = "hello,"
+        
+        concat(hello, "world!")
+        
         fun coolPrint(thing) {
             print('cool print: {thing}')
             return thing
@@ -18,7 +26,7 @@ fun main() {
                     print("this should be logged")
                 }
             } 
-            print('argument = {coolPrint(arg + 1} !!') 
+            print('argument = {coolPrint(arg + 1)} !!') 
         }
         
         helloWorld(1)
@@ -32,11 +40,7 @@ fun main() {
     """.trimIndent().toCharArray()).tokenize()
     val nodes = Parser(tok).parse()
     println(nodes)
-    val it = Interpreter(
-        logMethod = {
-             logger.info(it)
-        }
-    )
+    val it = Interpreter()
     it.interpret(nodes)
     // platform.entry()
 }

@@ -1,12 +1,12 @@
 package dev.hunter.nerve.core
 
 class Interpreter(
-    val logMethod: (String) -> Unit = { println(it) },
+    val logMethod: (String) -> Unit = { println("Script: $it") },
     var debug: Boolean = false,
     val initialVars: Map<String, Any?>
 ) {
     constructor(
-        logMethod: (String) -> Unit = { println(it) },
+        logMethod: (String) -> Unit = { println("Script: $it") },
         debug: Boolean = false,
         vararg initialVars: Pair<String, Any?>
     ) : this(logMethod, debug, initialVars.toMap())
@@ -61,6 +61,6 @@ sealed class BuiltInFunction(
         if (args.size > 1) throw RuntimeException("Print has 1 argument, a string")
         val str = args[0]
         val ret = if (str is OfValue) scope.computeValuable(str).toString() else str.toString()
-        scope.interpreter.logMethod("Script: $ret")
+        scope.interpreter.logMethod(ret)
     })
 }

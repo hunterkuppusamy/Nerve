@@ -60,18 +60,9 @@ class Parser(
                     is Token.Separator -> {
                         when (next.kind){
                             SeparatorKind.LEFT_PAREN -> {
-                                consume() // left paren
-                                val params = ArrayList<OfValue>()
-                                do {
-                                    if (current == null || current is Token.Separator) break
-                                    val thing = parseExpression()
-                                    if (thing !is OfValue) throwParseException("Expected yielding expression for function argument")
-                                    params.add(thing)
-                                } while (true)
-                                consume() // right paren
-                                return FunctionInvoke(entry, params)
+                                return parseFunctionInvocation(entry)
                             }
-                            else -> throwParseException("Expected left parenthesis for function invocation: $next")
+                            else -> throwParseException("Expected left parenthesis for function invocation: $entry")
                         }
                     }
                     else -> throwParseException("Unhandled identifier: $next")
@@ -86,14 +77,15 @@ class Parser(
                         if ((current as? Token.Separator)?.kind != SeparatorKind.LEFT_PAREN) throwParseException("Expected left parenthesis for parameters of function: $entry")
                         consume() // left paren
                         val params = ArrayList<Token.Identifier>()
-                        var right = current
-                        while ((right !is Token.Separator) || right.kind != SeparatorKind.RIGHT_PAREN){
-                            if (right !is Token.Identifier) throwParseException("Expected identifier in parameters of function: $entry")
+                        do {
+                            val right = current
+                            if (right !is Token.Identifier) throwParseException("Expected identifier in parameters of function: $identifier -> got $right")
                             params.add(right)
                             consume() // last param
-                            right = current
-                        }
-                        consume() // right paren
+                            val comma = consume()
+                            if (comma is Token.Separator && comma.kind == SeparatorKind.RIGHT_PAREN) break
+                            if (!(comma is Token.Separator && comma.kind == SeparatorKind.COMMA)) throwParseException("Expected comma after parameter '$right' in function declaration: $identifier")
+                        } while (true)
                         return FunctionDefinition(identifier, params, parseBody("function ${identifier.value} at line ${identifier.line}"))
                     }
                     KeywordKind.RETURN -> {
@@ -121,18 +113,22 @@ class Parser(
     }
 
     private fun parseBody(function: String): List<Node> {
-        val left = consume()
+        val left = consume() // left paren
         if (left !is Token.Separator || left.kind != SeparatorKind.LEFT_BRACE) throwParseException("Expected left brace to start body: $function")
-        val body = ArrayList<Node>()
-        do {
-            val next = current
-            // handle empty function body
-            if (next is Token.Separator && next.kind == SeparatorKind.RIGHT_BRACE) break
-            val line = parseStatement()
-            body.add(line)
-        } while (current !is Token.Separator)
-        consume() // right brace
-        return body
+        try {
+            val body = ArrayList<Node>()
+            do {
+                val next = current
+                // handle empty function body
+                if (next is Token.Separator && next.kind == SeparatorKind.RIGHT_BRACE) break
+                val line = parseStatement()
+                body.add(line)
+            } while (current !is Token.Separator)
+            consume() // right brace
+            return body
+        }catch (p: ParseException) {
+            throwParseException(function, p)
+        }
     }
 
     private fun parseExpression(): Node {
@@ -204,16 +200,7 @@ class Parser(
                     is Token.Separator -> {
                         when (next.kind) {
                             SeparatorKind.LEFT_PAREN -> {
-                                consume() // left paren
-                                val params = ArrayList<OfValue>()
-                                do {
-                                    if (current == null || current is Token.Separator) break
-                                    val thing = parseExpression()
-                                    if (thing !is OfValue) throwParseException("Expected yielding expression for function argument")
-                                    params.add(thing)
-                                } while (true)
-                                consume() // right paren
-                                return FunctionInvoke(token, params)
+                                return parseFunctionInvocation(token)
                             }
                             else -> token
                         }
@@ -221,14 +208,35 @@ class Parser(
                     else -> token
                 }
             }
+            is Token.Separator -> throwParseException("Expected value or expression, got a comma")
             else -> throwParseException("Unhandled valuable: $token")
         }
     }
 
-    private fun throwParseException(msg: String): Nothing {
+    private fun parseFunctionInvocation(id: Token.Identifier): FunctionInvoke {
+        consume() // left paren
+        val args = ArrayList<OfValue>()
+        var first = true
+        do {
+            val cur = current
+            if (cur is Token.Separator && cur.kind == SeparatorKind.RIGHT_PAREN) {
+                consume()
+                break
+            } // handle no arg function
+            val arg = parseExpression()
+            val comma = consume()
+            if (arg !is OfValue) throwParseException("Expected expression in arguments of function $id")
+            args.add(arg)
+            if (comma is Token.Separator && comma.kind == SeparatorKind.RIGHT_PAREN) break
+            if (!(comma is Token.Separator && comma.kind == SeparatorKind.COMMA)) throwParseException("Expected comma to delimit arguments in function $id")
+        } while (true)
+        return FunctionInvoke(id, args)
+    }
+
+    private fun throwParseException(msg: String, cause: Throwable? = null): Nothing {
         println(tokens.contentDeepToString())
         println(nodes)
-        throw ParseException("At line #${current?.line} -> $msg")
+        throw ParseException("At line #${current?.line} -> $msg", cause)
     }
 }
 
@@ -327,4 +335,4 @@ data class ReturnFunction(
 
 object BreakStatement: Node
 
-class ParseException(message: String) : Exception(message)
+class ParseException(message: String, override val cause: Throwable?) : Exception(message)

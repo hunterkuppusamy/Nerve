@@ -46,6 +46,7 @@ open class Tokenizer(
     private fun lexSpecial(c: Char) {
         when (c){
             '(' -> tokens.add(Token.Separator(line, SeparatorKind.LEFT_PAREN))
+            ',' -> tokens.add(Token.Separator(line, SeparatorKind.COMMA))
             ')' -> tokens.add(Token.Separator(line, SeparatorKind.RIGHT_PAREN))
             '{' -> tokens.add(Token.Separator(line, SeparatorKind.LEFT_BRACE))
             '}' -> tokens.add(Token.Separator(line, SeparatorKind.RIGHT_BRACE))
@@ -100,9 +101,11 @@ open class Tokenizer(
     private fun lexString(first: Char) {
         var isTemplate = false
         val template = ArrayList<Any>()
+        var escaped = false
         while(buf.hasRemaining()) {
             val c = buf.consume()
-            if (c == first) break
+            if (c == '\\') escaped = true
+            if (!escaped && c == first) break
             else if (c == TEMPLATE_START_CHAR) {
                 isTemplate = true
                 val literal = literalBuffer.toString()
@@ -118,6 +121,7 @@ open class Tokenizer(
                 val tokens = StringTemplateTokenizer(this, charsInside).tokenize()
                 template.add(tokens)
             } else literalBuffer.append(c)
+            escaped = false
         }
         val literal = literalBuffer.toString()
         literalBuffer.clear()
@@ -268,6 +272,7 @@ enum class SeparatorKind{
     RIGHT_BRACE,
     LEFT_BRACKET,
     RIGHT_BRACKET,
+    COMMA
 }
 
 enum class KeywordKind{

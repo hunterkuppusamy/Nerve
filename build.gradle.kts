@@ -1,9 +1,9 @@
-import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
-    alias(libs.plugins.jetbrainsCompose)
-    alias(libs.plugins.compose.compiler)
+    // alias(libs.plugins.jetbrainsCompose)
+    // alias(libs.plugins.compose.compiler)
     `maven-publish`
 }
 
@@ -58,18 +58,18 @@ kotlin {
     }
 }
 
-compose.desktop {
-    application {
-        mainClass = "dev.hunter.nerve.MainKt"
-
-        nativeDistributions {
-            targetFormats(TargetFormat.Exe, TargetFormat.AppImage, TargetFormat.Rpm)
-            packageName = "dev.hunter"
-            packageVersion = "0.0.1"
-            includeAllModules = true
-        }
-    }
-}
+// compose.desktop {
+//     application {
+//         mainClass = "dev.hunter.nerve.MainKt"
+//
+//         nativeDistributions {
+//             targetFormats(TargetFormat.Exe, TargetFormat.AppImage, TargetFormat.Rpm)
+//             packageName = "dev.hunter"
+//             packageVersion = "0.0.1"
+//             includeAllModules = true
+//         }
+//     }
+// }
 
 publishing {
     repositories {
