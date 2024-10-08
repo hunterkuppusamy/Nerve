@@ -33,7 +33,6 @@ jobs:
     - name: Build with Gradle
       run: gradle build
     - name: publish
-      working-directory: ./Nerve
       run: gradle publish --info
       env:
         TOKEN: ${{ secrets.GITHUB_TOKEN }}
