@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "dev.hunter"
-version = "0.0.1"
+version = "0.0.2"
 
 kotlin {
     jvm {
@@ -40,19 +40,19 @@ kotlin {
 
         jvmMain {
             dependencies {
-                implementation(compose.desktop.currentOs)
+                // implementation(compose.desktop.currentOs)
             }
         }
 
         linuxMain {
             dependencies {
-                implementation(compose.desktop.currentOs)
+                // implementation(compose.desktop.currentOs)
             }
         }
 
         mingwMain {
             dependencies {
-                implementation(compose.desktop.currentOs)
+                // implementation(compose.desktop.currentOs)
             }
         }
     }
@@ -102,18 +102,9 @@ publishing {
                 }
             }
 
-            println("artificat = $group:$artifactId:$version")
+            println("artifact = $group:$artifactId:$version")
 
             from(getComponents()["kotlin"]) // the property delegate for the function is actually overloaded and idk how to not do that!
         }
-    }
-}
-
-tasks {
-    publish {
-
-    }
-    build {
-
     }
 }
