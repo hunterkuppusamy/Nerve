@@ -2,7 +2,6 @@ package dev.hunter.nerve.core
 
 import dev.hunter.nerve.debugLog
 import kotlin.math.pow
-import kotlin.time.Duration
 import kotlin.time.measureTime
 
 @Suppress("MemberVisibilityCanBePrivate")
@@ -175,7 +174,7 @@ class GlobalExecutionScope(
     override var time: Double = 0.0
     override val debug: Boolean get() = interpreter.debug
     init {
-        functions.putAll(BuiltInFunctions.entries.associateBy { it.name.lowercase() })
+        functions.putAll(FunctionRegistry.entries)
         if (debug) {
             debugLog.info("Starting with initial vars: ${interpreter.initialVars}")
         }

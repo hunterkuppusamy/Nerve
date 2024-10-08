@@ -10,19 +10,21 @@ plugins {
 group = "dev.hunter.nerve"
 version = "0.0.1"
 
-repositories {
-    mavenCentral()
-    google()
-}
-
 kotlin {
     jvm()
-    linuxX64()
-    mingwX64()
+    // no reason for these really...
+    // linuxX64()
+    // mingwX64()
+
+    repositories {
+        mavenCentral()
+        google()
+    }
 
     sourceSets {
         commonMain {
             dependencies {
+                implementation(libs.kotlin.reflect)
                 implementation(compose.runtime)
                 implementation(compose.material)
                 implementation(compose.desktop.common)
@@ -42,13 +44,13 @@ kotlin {
 
         linuxMain {
             dependencies {
-                implementation(compose.desktop.linux_x64)
+                implementation(compose.desktop.currentOs)
             }
         }
 
         mingwMain {
             dependencies {
-                implementation(compose.desktop.windows_x64)
+                implementation(compose.desktop.currentOs)
             }
         }
     }
@@ -98,6 +100,8 @@ tasks {
                     groupId = project.group.toString()
                     artifactId = project.name.lowercase()
                     version = project.version.toString()
+
+                    from(getComponents()["kotlin"]) // the property delegate for the function is actually overloaded and idk how to not do that!
                 }
             }
         }

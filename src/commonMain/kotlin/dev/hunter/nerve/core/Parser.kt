@@ -280,25 +280,23 @@ data class TemplateString(
  * A [Node] that denotes the definition of a new function with an [Identifier][Token.Identifier], Parameters,
  * and a body.
  *
- * Can be [invoked][Function.invoke] just as [built-in functions][BuiltInFunctions] can.
+ * Can be [invoked][Function.invoke0] just as [built-in functions][BuiltInFunctions] can.
  */
 data class FunctionDefinition(
     val function: Token.Identifier,
     val parameters: List<Token.Identifier>,
     val body: List<Node>
-): Function, Node {
-    override fun invoke(parentScope: ExecutionScope, args: List<Any?>): Any? {
-        val scope = LocalExecutionScope(parentScope)
-        if (parameters.size != args.size) throw RuntimeException("Incorrect number of parameters used to invoke ${function.value}(${args.size})")
+): Function(), Node {
+    override fun invoke0(localScope: ExecutionScope, args: List<Any?>): Any? {
         for ((i, arg) in parameters.withIndex()) {
-            scope.setVar(arg, args[i])
+            localScope.setVar(arg, args[i])
         }
         for (node in body) {
             if (node is ReturnFunction) {
-                return if (node.variable is Token.Identifier) scope.getVar(node.variable)
-                else node.variable
+                return if (node.variable is Token.Identifier) localScope.getVar(node.variable)
+                else localScope.computeValuable(node.variable)
             }
-            scope.interpret(node)
+            localScope.interpret(node)
         }
         return Unit
     }
