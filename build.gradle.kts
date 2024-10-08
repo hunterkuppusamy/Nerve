@@ -27,13 +27,13 @@ kotlin {
         commonMain {
             dependencies {
                 implementation(libs.kotlin.reflect)
-                implementation(compose.runtime)
-                implementation(compose.material)
-                implementation(compose.desktop.common)
-                implementation(compose.ui)
-                implementation(compose.uiUtil)
-                implementation(compose.uiTooling)
-                implementation(compose.foundation)
+                // implementation(compose.runtime)
+                // implementation(compose.material)
+                // implementation(compose.desktop.common)
+                // implementation(compose.ui)
+                // implementation(compose.uiUtil)
+                // implementation(compose.uiTooling)
+                // implementation(compose.foundation)
                 implementation(libs.kotlinx.coroutines.core)
             }
         }
