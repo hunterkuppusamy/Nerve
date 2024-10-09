@@ -19,6 +19,9 @@ class Interpreter(
         for (node in nodes){
             global.interpret(node)
         }
+        if (debug) {
+            logMethod("Total interpretation time = $time ms")
+        }
     }
 }
 

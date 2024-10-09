@@ -2,6 +2,7 @@ package dev.hunter.nerve.core
 
 import dev.hunter.nerve.debugLog
 import kotlin.math.pow
+import kotlin.math.sign
 import kotlin.time.measureTime
 
 @Suppress("MemberVisibilityCanBePrivate")
@@ -60,9 +61,6 @@ abstract class ExecutionScope{
             }
         }
         val elapsed = start.inWholeMicroseconds / 1000.0
-        if (debug) {
-            debugLog.info("Time to compute node '$node' -> $elapsed ms")
-        }
         time += elapsed
     }
 
@@ -128,7 +126,7 @@ abstract class ExecutionScope{
             }
             OperatorKind.LESS_THAN -> {
                 return if (left is Comparable<*> && right is Comparable<*>) {
-                    (left as Comparable<Any>).compareTo(right)
+                    (left as Comparable<Any>).compareTo(right).sign == -1
                 }else throw RuntimeException("Binary operands $left or $right is not a number")
             }
             OperatorKind.INEQUALITY -> {
@@ -140,15 +138,8 @@ abstract class ExecutionScope{
 
     fun computeInvocation(invoke: FunctionInvoke): Any? {
         val args = invoke.arguments.map {
-            when (it) {
-                is Token.Identifier -> {
-                    getVar(it)
-                }
-                is FunctionInvoke -> computeInvocation(it)
-                is BinaryExpression -> computeBinaryExpression(it)
-                is OfValue -> computeValuable(it)
-                else -> throw RuntimeException("Invoked with wrong parameters? Parse error? $invoke")
-            }
+            if (it is OfValue) computeValuable(it)
+            else throw RuntimeException("Invoked with wrong parameters? Parse error? $invoke")
         }
         val func = functions[invoke.function.value] ?: throw RuntimeException("Function '${invoke.function.value}' is undefined")
         return func.invoke(this, args)
