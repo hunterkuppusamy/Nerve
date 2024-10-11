@@ -110,20 +110,22 @@ open class Tokenizer(
         tokens.add(token)
     }
 
+    private val templateBuffer = ArrayList<Any>(5)
+
     private fun lexString() {
         var isTemplate = false
-        val template = ArrayList<Any>(2)
         var escaped = false
+        // TODO fix string escaping and control characters
         val first = buf.consume()
         while(buf.hasRemaining()) {
             val c = buf.consume()
             if (c == '\\') escaped = true
             if (!escaped && c == first) break
-            else if (c == TEMPLATE_START_CHAR) {
+            else if (!escaped && c == TEMPLATE_START_CHAR) {
                 isTemplate = true
                 val literal = literalBuffer.toString()
                 literalBuffer.clear()
-                if (literal.isNotBlank()) template.add(Token.StringLiteral(line, literal))
+                if (literal.isNotBlank()) templateBuffer.add(Token.StringLiteral(line, literal))
                 val chars = CharBuilder()
                 do {
                     val t = buf.consume()
@@ -132,7 +134,7 @@ open class Tokenizer(
                 } while (buf.hasRemaining())
                 val charsInside = chars.toString() // everything inside the template
                 val tokens = StringTemplateTokenizer(this, charsInside).tokenize()
-                template.add(tokens)
+                templateBuffer.add(tokens)
             } else literalBuffer.append(c)
             escaped = false
         }
@@ -142,8 +144,9 @@ open class Tokenizer(
             tokens.add(Token.StringLiteral(line, literal))
         } else {
             if (literal.isNotBlank())
-                template.add(Token.StringLiteral(line, literal))
-            tokens.add(Token.StringTemplate(line, template.toTypedArray()))
+                templateBuffer.add(Token.StringLiteral(line, literal))
+            tokens.add(Token.StringTemplate(line, templateBuffer.toTypedArray()))
+            templateBuffer.clear()
         }
     }
 
@@ -202,7 +205,7 @@ open class Tokenizer(
     }
 
     override fun debug(flag: DebugFlag?, message: () -> String) {
-        if (if (flag != null) debug.contains(flag) else true) platform.logger.info("[$flag] DEBUG: ${message()}") // lazily invoke the message, only if debugging
+        if (if (flag != null) debug.contains(flag) else debug.size > 0) platform.logger.info("[${flag ?: "ANY"}] DEBUG: ${message()}") // lazily invoke the message, only if debugging
     }
 }
 

@@ -65,6 +65,7 @@ sealed class Keyword: Token(){
     data class Continue(override val line: Int): Keyword()
     data class Fun(override val line: Int): Keyword()
     data class Else(override val line: Int): Keyword()
+    data class Null(override val line: Int): Keyword(), OfValue
 
     companion object{
         fun byName(name: String, line: Int): Keyword? {
@@ -77,6 +78,7 @@ sealed class Keyword: Token(){
                 "break" -> Break(line)
                 "continue" -> Continue(line)
                 "fun" -> Fun(line)
+                "null" -> Null(line)
                 else -> null
             }
         }

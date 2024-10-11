@@ -12,7 +12,7 @@ enum class DebugFlag {
 class Interpreter(
     val logMethod: (String) -> Unit = { println("Script: $it") },
     var debug: EnumSet<DebugFlag> = EnumSet(),
-    val initialVars: Map<String, Any?> = emptyMap(),
+    initialVars: Map<String, Any?> = emptyMap(),
 ): CanDebug {
     constructor(
         logMethod: (String) -> Unit = { println("Script: $it") },
@@ -20,7 +20,7 @@ class Interpreter(
         vararg initialVars: Pair<String, Any?>
     ) : this(logMethod, debug, initialVars.toMap())
 
-    private val global = GlobalExecutionScope(this)
+    private val global = GlobalExecutionScope(this, initialVars)
 
     val time get() = global.time
 
@@ -39,6 +39,6 @@ class Interpreter(
     }
 
     override fun debug(flag: DebugFlag?, message: () -> String) {
-        if (if (flag != null) debug.contains(flag) else true) logMethod("[$flag] DEBUG: ${message()}") // lazily invoke the message, only if debugging
+        if (if (flag != null) debug.contains(flag) else debug.size > 0) logMethod("[${flag ?: "ANY"}] DEBUG: ${message()}") // lazily invoke the message, only if debugging
     }
 }

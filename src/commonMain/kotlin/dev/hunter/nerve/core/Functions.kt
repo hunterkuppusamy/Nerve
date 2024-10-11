@@ -1,9 +1,8 @@
 package dev.hunter.nerve.core
 
+import dev.hunter.nerve.Nerve
 import org.jetbrains.annotations.ApiStatus
 import kotlin.reflect.KClass
-import kotlin.time.Duration.Companion.nanoseconds
-import kotlin.time.TimeSource
 import kotlin.time.measureTime
 
 /**
@@ -24,7 +23,7 @@ abstract class Function{
             val ret: Any? = invoke0(local, args)
             return ret
         }catch (t: Throwable) {
-            throw RuntimeException(this.toString(), t)
+            throw RuntimeException("Within $this", t)
         }
     }
     override fun toString(): String = "Function_${this::class.simpleName}(...)"
@@ -57,6 +56,8 @@ object FunctionRegistry {
     val entries: Map<String, Function> get() = _entries
 
     fun register(function: DelegateFunction) {
+        val prev = entries[function.name]
+        if (prev is StandardFunction) throw IllegalArgumentException("Cannot override a standard function '$function'")
         _entries[function.name] = function
     }
 
@@ -70,6 +71,8 @@ object FunctionRegistry {
     init {
         register(StandardFunction.Print)
         register(StandardFunction.SystemNanoTime)
+        register(StandardFunction.SystemCurrentMillis)
+        register(StandardFunction.RunNerve)
     }
 }
 
@@ -79,14 +82,23 @@ sealed class StandardFunction(
     val exec: (ExecutionScope, List<Any?>) -> Any?
 ): DelegateFunction(name, params) {
     override fun handle(scope: ExecutionScope, args: List<Any?>): Any? = exec(scope, args)
-    data object Print: StandardFunction("print", String::class, exec =
+    data object Print: StandardFunction("print", Any::class, exec =
     { scope, args ->
-        val str = args[0]
-        val ret = if (str is OfValue) scope.computeValuable(str).toString() else str.toString()
+        val str = args.getOrNull(0)
+        val ret = if (str is OfValue) scope.computeValuable(str).toString() else str?.toString() ?: ""
         scope.interpreter.logMethod(ret)
     })
-    data object SystemNanoTime: StandardFunction("system_currentMillis", exec =
+    data object SystemCurrentMillis: StandardFunction("system_currentMillis", exec =
     { _, _ ->
         System.currentTimeMillis()
+    })
+    data object SystemNanoTime: StandardFunction("system_nanoTime", exec =
+    {_ , _ ->
+        System.nanoTime()
+    })
+    data object RunNerve: StandardFunction("nerve_run", String::class, exec =
+    {scope, args ->
+        val string = args.getOrNull(0) ?: throw RuntimeException("Missing parameter 1")
+        Nerve.run((string as String).toCharArray())
     })
 }

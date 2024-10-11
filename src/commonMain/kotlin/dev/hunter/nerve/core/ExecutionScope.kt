@@ -89,6 +89,7 @@ abstract class ExecutionScope{
                 }
                 str
             }
+            is Keyword.Null -> null
             else -> throw RuntimeException("Unhandled valuable expression $node")
         }
     }
@@ -96,8 +97,6 @@ abstract class ExecutionScope{
     fun computeBinaryExpression(node: BinaryExpression): Any {
         val left = computeValuable(node.left)
         val right = computeValuable(node.right)
-        if (left == null) throw RuntimeException("Left side is null -> $node")
-        if (right == null) throw RuntimeException("Right side is null -> $node")
         when (val op = node.operator) {
             is Operator.Add -> {
                 return if (left is Number && right is Number) {
@@ -171,15 +170,13 @@ abstract class ExecutionScope{
 }
 
 class GlobalExecutionScope(
-    override val interpreter: Interpreter
+    override val interpreter: Interpreter,
+    initVariables: Map<String, Any?>
 ) : ExecutionScope() {
-    override val variables: HashMap<String, Any?> = HashMap(interpreter.initialVars)
+    override val variables: HashMap<String, Any?> = HashMap(initVariables)
     override val functions: HashMap<String, Function> = HashMap(FunctionRegistry.entries)
     override val global: GlobalExecutionScope = this
     override val debug: EnumSet<DebugFlag> get() = interpreter.debug
-    init {
-        interpreter.debug { "Starting with initial vars: ${interpreter.initialVars}" }
-    }
 }
 
 class LocalExecutionScope(

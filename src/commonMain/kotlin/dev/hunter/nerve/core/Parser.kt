@@ -98,10 +98,10 @@ class Parser(
             is Keyword.If -> {
                 consume() // if
                 val left = consume()
-                if (left !is Separator.LeftParen) throwParseException("Expected left paren to start IF expression")
+                if (left !is Separator.LeftParen) throwParseException("Expected left paren to start IF expression: $left")
                 val condition = parseExpression()
                 val right = consume()
-                // if (right !is Separator.RightParen) throwParseException("Expected right paren to end IF expression")
+                if (right !is Separator.RightParen) throwParseException("Expected right paren to end IF expression: $right")
                 if (condition !is OfValue) throwParseException("Expected condition to return true or false")
                 return IfStatement(condition, parseBody("If statement at line #${token.line}"))
             }
@@ -113,7 +113,7 @@ class Parser(
 
     private fun parseBody(function: String): List<Node> {
         val left = consume() // left paren
-        if (left !is Separator.LeftBrace) throwParseException("Expected left brace to start body: $function")
+        if (left !is Separator.LeftBrace) throwParseException("Expected left brace to start body: $left")
         try {
             val body = ArrayList<Node>()
             do {
@@ -203,6 +203,10 @@ class Parser(
                     else -> token
                 }
             }
+            is Keyword.Null -> {
+                consume()
+                token
+            }
             else -> throwParseException("Unhandled valuable: $token")
         }
     }
@@ -227,13 +231,11 @@ class Parser(
     }
 
     private fun throwParseException(msg: String, cause: Throwable? = null): Nothing {
-        println(tokens.contentDeepToString())
-        println(nodes)
         throw ParseException("At line #${current?.line} -> $msg", cause)
     }
 
     override fun debug(flag: DebugFlag?, message: () -> String) {
-        if (if (flag != null) debug.contains(flag) else true) platform.logger.info("[$flag] DEBUG: ${message()}")
+        if (if (flag != null) debug.contains(flag) else debug.size > 0) platform.logger.info("[${flag ?: "ANY"}] DEBUG: ${message()}") // lazily invoke the message, only if debugging
     }
 }
 
