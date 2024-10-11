@@ -1,19 +1,25 @@
 package dev.hunter.nerve.core
 
-import dev.hunter.nerve.debugLog
+import dev.hunter.nerve.EnumSet
 import kotlin.math.pow
 import kotlin.math.sign
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.measureTime
 
 @Suppress("MemberVisibilityCanBePrivate")
 abstract class ExecutionScope{
     /**
      * All variables within this scope
+     * @see LocalExecutionScope.variables
+     * @see GlobalExecutionScope.variables
      */
     internal abstract val variables: HashMap<String, Any?>
 
     /**
      * All functions within this scope
+     * @see LocalExecutionScope.functions
+     * @see GlobalExecutionScope.functions
      */
     internal abstract val functions: HashMap<String, Function>
 
@@ -25,33 +31,37 @@ abstract class ExecutionScope{
     /**
      * Whether the scope should log debug information
      */
-    abstract val debug: Boolean
+    abstract val debug: EnumSet<DebugFlag>
 
     open val interpreter: Interpreter get() = global.interpreter
 
     /**
      * Total execution time in ms
      */
-    open var time: Double get() = global.time
-        set(value) { global.time = value }
+    var time: Duration = 0.nanoseconds
 
     /**
      * Interpret a [Node]
      */
     fun interpret(node: Node){
-        val start = measureTime {
+        val elapsed = measureTime {
             when (node){
                 is OfValue -> computeValuable(node)
                 is VariableAssignment -> {
                     setVar(node.variable, computeValuable(node.expression))
                 }
                 is FunctionDefinition -> {
-                    functions[node.function.value] = node
+                    functions[node.function.name] = node
                 }
                 is IfStatement -> {
-                    val run = computeValuable(node.operand)
-                    val bool = run as? Boolean
-                    if (bool == true) {
+                    val op =
+                        // optimised evaluation of literals
+                        if ((node.condition as? Token.NaturalLiteral)?.value == 1L || (node.condition as? Token.BooleanLiteral)?.value == true) true
+                        else {
+                            val value = computeValuable(node.condition)
+                            value as? Boolean ?: (value as? Number == 1)
+                        }
+                    if (op) {
                         for (line in node.body) {
                             if (line is BreakStatement) break
                             interpret(line)
@@ -60,7 +70,7 @@ abstract class ExecutionScope{
                 }
             }
         }
-        val elapsed = start.inWholeMicroseconds / 1000.0
+        interpreter.debug(DebugFlag.TIMINGS) { "Node '$node' interpreted in $elapsed" }
         time += elapsed
     }
 
@@ -89,47 +99,47 @@ abstract class ExecutionScope{
         if (left == null) throw RuntimeException("Left side is null -> $node")
         if (right == null) throw RuntimeException("Right side is null -> $node")
         when (val op = node.operator) {
-            OperatorKind.ADD -> {
+            is Operator.Add -> {
                 return if (left is Number && right is Number) {
                     left.toDouble() + right.toDouble()
                 } else if (left is String && right is String) {
                     left + right
                 } else throw RuntimeException("Binary operands $left or $right is not a number or string")
             }
-            OperatorKind.SUBTRACT -> {
+            is Operator.Subtract -> {
                 return if (left is Number && right is Number) {
                     left.toDouble() - right.toDouble()
                 } else throw RuntimeException("Binary operands $left or $right is not a number")
             }
-            OperatorKind.MULTIPLY -> {
+            is Operator.Multiply -> {
                 return if (left is Number && right is Number) {
                     left.toDouble() * right.toDouble()
                 } else throw RuntimeException("Binary operands $left or $right is not a number")
             }
-            OperatorKind.DIVIDE -> {
+            is Operator.Divide -> {
                 return if (left is Number && right is Number) {
                     left.toDouble() / right.toDouble()
                 } else throw RuntimeException("Binary operands $left or $right is not a number")
             }
-            OperatorKind.POWER -> {
+            is Operator.Exponentiate -> {
                 return if (left is Number && right is Number) {
                     left.toDouble().pow(right.toDouble())
                 } else throw RuntimeException("Binary operands $left or $right is not a number")
             }
-            OperatorKind.EQUALITY -> {
+            is Operator.IsEqual -> {
                 return left == right
             }
-            OperatorKind.MOD -> {
+            is Operator.Modulate -> {
                 return if (left is Number && right is Number) {
                     left.toDouble().mod(right.toDouble())
                 }else throw RuntimeException("Binary operands $left or $right is not a number")
             }
-            OperatorKind.LESS_THAN -> {
+            is Operator.IsLessThan -> {
                 return if (left is Comparable<*> && right is Comparable<*>) {
                     (left as Comparable<Any>).compareTo(right).sign == -1
                 }else throw RuntimeException("Binary operands $left or $right is not a number")
             }
-            OperatorKind.INEQUALITY -> {
+            is Operator.IsNotEqual -> {
                 return left != right
             }
             else -> throw RuntimeException("Unhandled operator $op")
@@ -141,47 +151,47 @@ abstract class ExecutionScope{
             if (it is OfValue) computeValuable(it)
             else throw RuntimeException("Invoked with wrong parameters? Parse error? $invoke")
         }
-        val func = functions[invoke.function.value] ?: throw RuntimeException("Function '${invoke.function.value}' is undefined")
+        val func = functions[invoke.function.name] ?: throw RuntimeException("Function '${invoke.function.name}' is undefined")
         return func.invoke(this, args)
     }
 
     fun setVar(id: Token.Identifier, value: Any?){
-        variables[id.value] = value
+        variables[id.name] = value
     }
 
     fun getVar(id: Token.Identifier): Any? {
-        if (!variables.containsKey(id.value)) throw RuntimeException("#${id.line} -> Variable '${id.value}' is not defined'")
-        val ret = variables[id.value]
+        if (!variables.containsKey(id.name)) throw RuntimeException("#${id.line} -> Variable '${id.name}' is not defined'")
+        val ret = variables[id.name]
         return ret
+    }
+
+    fun getVarOrNull(id: Token.Identifier): Any? {
+        return variables[id.name]
     }
 }
 
 class GlobalExecutionScope(
     override val interpreter: Interpreter
 ) : ExecutionScope() {
-    override val variables: HashMap<String, Any?> = HashMap()
-    override val functions: HashMap<String, Function> = HashMap()
+    override val variables: HashMap<String, Any?> = HashMap(interpreter.initialVars)
+    override val functions: HashMap<String, Function> = HashMap(FunctionRegistry.entries)
     override val global: GlobalExecutionScope = this
-    override var time: Double = 0.0
-    override val debug: Boolean get() = interpreter.debug
+    override val debug: EnumSet<DebugFlag> get() = interpreter.debug
     init {
-        functions.putAll(FunctionRegistry.entries)
-        if (debug) {
-            debugLog.info("Starting with initial vars: ${interpreter.initialVars}")
-        }
-        variables.putAll(interpreter.initialVars)
+        interpreter.debug { "Starting with initial vars: ${interpreter.initialVars}" }
     }
 }
 
 class LocalExecutionScope(
-    parent: ExecutionScope,
+    private val parent: ExecutionScope,
 ): ExecutionScope() {
-    override val variables: HashMap<String, Any?> = HashMap()
-    override val functions: HashMap<String, Function> = HashMap()
+    override val variables: HashMap<String, Any?> = HashMap(parent.variables)
+
+    /**
+     * Functions are not changed within anything but the global scope
+     * @see [ExecutionScope.functions]
+     */
+    override val functions: HashMap<String, Function> get() = parent.functions
     override val global: GlobalExecutionScope = parent.global
-    override val debug: Boolean = parent.debug
-    init {
-        variables.putAll(parent.variables)
-        functions.putAll(parent.functions)
-    }
+    override val debug = parent.debug
 }

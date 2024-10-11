@@ -1,13 +1,22 @@
 package dev.hunter.nerve.core
 
+import dev.hunter.nerve.CanDebug
+import dev.hunter.nerve.EnumSet
+
+enum class DebugFlag {
+    TIMINGS,
+    STATE,
+    NON_FATAL_ERRORS
+}
+
 class Interpreter(
     val logMethod: (String) -> Unit = { println("Script: $it") },
-    var debug: Boolean = false,
-    val initialVars: Map<String, Any?>
-) {
+    var debug: EnumSet<DebugFlag> = EnumSet(),
+    val initialVars: Map<String, Any?> = emptyMap(),
+): CanDebug {
     constructor(
         logMethod: (String) -> Unit = { println("Script: $it") },
-        debug: Boolean = false,
+        debug: EnumSet<DebugFlag> = EnumSet(),
         vararg initialVars: Pair<String, Any?>
     ) : this(logMethod, debug, initialVars.toMap())
 
@@ -15,55 +24,21 @@ class Interpreter(
 
     val time get() = global.time
 
-    fun interpret(nodes: Collection<Node>){
-        for (node in nodes){
-            global.interpret(node)
+    fun interpret(nodes: Collection<Node>): Throwable? {
+        var ret: Throwable? = null
+        try{
+            for (node in nodes) {
+                global.interpret(node)
+            }
+        }catch(t: Throwable){
+            debug(DebugFlag.NON_FATAL_ERRORS) { "Interpretation threw an exception: ${t.message}" }
+            ret = t
         }
-        if (debug) {
-            logMethod("Total interpretation time = $time ms")
-        }
-    }
-}
-
-abstract class Function{
-    fun invoke(scope: ExecutionScope, args: List<Any?>): Any?{
-        val local = LocalExecutionScope(scope)
-        return invoke0(local, args)
-    }
-    protected abstract fun invoke0(localScope: ExecutionScope, args: List<Any?>): Any?
-}
-
-const val TEMPLATE_START_CHAR = '{'
-const val TEMPLATE_END_CHAR = '}'
-
-object FunctionRegistry {
-    private val _entries = HashMap<String, Function>()
-    val entries: Map<String, Function> get() = _entries
-
-    fun register(name: String, function: Function) {
-        _entries[name] = function
+        debug(DebugFlag.TIMINGS) { "Total interpretation time = $time" }
+        return ret
     }
 
-    fun register(name: String, f: (ExecutionScope, List<Any?>) -> Any?) {
-        val function = object: Function() {
-            override fun invoke0(localScope: ExecutionScope, args: List<Any?>): Any? = f(localScope, args)
-        }
-        _entries[name] = function
+    override fun debug(flag: DebugFlag?, message: () -> String) {
+        if (if (flag != null) debug.contains(flag) else true) logMethod("[$flag] DEBUG: ${message()}") // lazily invoke the message, only if debugging
     }
-
-    init {
-        register("print", BuiltInFunction.Print)
-    }
-}
-
-sealed class BuiltInFunction(
-    val short: (ExecutionScope, List<Any?>) -> Any?
-): Function() {
-    override fun invoke0(localScope: ExecutionScope, args: List<Any?>): Any? = short(localScope, args)
-    data object Print: BuiltInFunction({ scope, args ->
-        if (args.size > 1) throw RuntimeException("Print has 1 argument, a string")
-        val str = args[0]
-        val ret = if (str is OfValue) scope.computeValuable(str).toString() else str.toString()
-        scope.interpreter.logMethod(ret)
-    })
 }

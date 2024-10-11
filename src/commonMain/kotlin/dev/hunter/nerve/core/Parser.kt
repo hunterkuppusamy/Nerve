@@ -1,15 +1,28 @@
 package dev.hunter.nerve.core
 
+import dev.hunter.nerve.CanDebug
+import dev.hunter.nerve.EnumSet
+import dev.hunter.nerve.platform
+
+/**
+ * TODO for improving this version of the parser.
+ * I think creating an entirely new parser is too high level for me, for now
+ *
+ * 1. Improve the `consume()` function, and maybe introduce a reified type parameter because there is a lot of one line conditional type checking
+ *      This probably shouldn't affect the large when trees
+ *
+ * 2.
+ */
 class Parser(
     private val tokens: Array<Token>,
-    val debug: Boolean = false
-) {
+    private val debug: EnumSet<DebugFlag> = EnumSet()
+): CanDebug {
     private var currentIndex = 0
     private val current: Token? get() {
         val ret = tokens.getOrNull(currentIndex)
         return ret
     }
-    val nodes = ArrayList<Node>()
+    private val nodes = ArrayList<Node>()
 
     private fun consume(): Token? {
         val ret = current
@@ -26,7 +39,7 @@ class Parser(
      */
     fun parse(): Collection<Node> {
         do {
-            if (debug){
+            if (debug.contains(DebugFlag.STATE)){
                 println("starting new statement at -> #${current?.line} ${current.toString()}")
             }
             val node = parseStatement()
@@ -36,94 +49,80 @@ class Parser(
     }
 
     private fun parseStatement(): Node {
-        when (val entry = current){
+        when (val token = current){
             is Token.Identifier -> {
                 consume() // consume id
                 when (val next = current){
-                    is Token.Equals -> {
+                    is Operator.Assign -> {
                         consume() // consume assignment
                         val expr = parseExpression()
                         if (expr !is OfValue) throwParseException("Expected yielding expression for variable assignment")
-                        return VariableAssignment(entry, expr)
+                        return VariableAssignment(token, expr)
                     }
-                    is Token.Operator -> {
-                        when (next.kind){
-                            OperatorKind.ADD -> {
-                                consume() // consume assignment
-                                val expr = parseExpression()
-                                if (expr !is OfValue) throwParseException("Expected yielding value for variable modification")
-                                return BinaryExpression(entry, next.kind, expr)
-                            }
-                            else -> throwParseException("Unhandled operator: $next")
-                        }
+                    is Operator -> {
+                        consume() // consume assignment
+                        val expr = parseExpression()
+                        if (expr !is OfValue) throwParseException("Expected yielding value for variable modification")
+                        return BinaryExpression(token, next, expr)
                     }
-                    is Token.Separator -> {
-                        when (next.kind){
-                            SeparatorKind.LEFT_PAREN -> {
-                                return parseFunctionInvocation(entry)
-                            }
-                            else -> throwParseException("Expected left parenthesis for function invocation: $entry")
-                        }
+                    is Separator.LeftParen -> {
+                        return parseFunctionInvocation(token)
                     }
-                    else -> throwParseException("Unhandled identifier: $next")
+                    else -> throwParseException("Expected an operator or parenthesis after an identifier")
                 }
             }
-            is Token.Keyword -> {
-                when (entry.kind){
-                    KeywordKind.FUN -> {
-                        consume() // keyword
-                        val identifier = current as? Token.Identifier ?: throwParseException("Expected identifier after function declaration: $entry")
-                        consume() // id
-                        if ((current as? Token.Separator)?.kind != SeparatorKind.LEFT_PAREN) throwParseException("Expected left parenthesis for parameters of function: $entry")
-                        consume() // left paren
-                        val params = ArrayList<Token.Identifier>()
-                        do {
-                            val right = current
-                            if (right !is Token.Identifier) throwParseException("Expected identifier in parameters of function: $identifier -> got $right")
-                            params.add(right)
-                            consume() // last param
-                            val comma = consume()
-                            if (comma is Token.Separator && comma.kind == SeparatorKind.RIGHT_PAREN) break
-                            if (!(comma is Token.Separator && comma.kind == SeparatorKind.COMMA)) throwParseException("Expected comma after parameter '$right' in function declaration: $identifier")
-                        } while (true)
-                        return FunctionDefinition(identifier, params, parseBody("function ${identifier.value} at line ${identifier.line}"))
-                    }
-                    KeywordKind.RETURN -> {
-                        consume() // return
-                        val value = parseExpression()
-                        if (value !is OfValue) throwParseException("Expected some value after return")
-                        return ReturnFunction(value)
-                    }
-                    KeywordKind.IF -> {
-                        consume() // if
-                        val left = consume()
-                        if (left !is Token.Separator || left.kind != SeparatorKind.LEFT_PAREN) throwParseException("Expected left paren to start IF expression")
-                        val operand = parseExpression()
-                        val right = consume()
-                        // if (right !is Token.Separator || right.kind != SeparatorKind.RIGHT_PAREN) throwParseException("Expected right paren to end IF expression")
-                        if (operand !is OfValue) throwParseException("Expected condition to return true or false")
-                        return IfStatement(operand, parseBody("If statement at line #${entry.line}"))
-                    }
-                    else -> throwParseException("Unhandled keyword: $entry")
-                }
+            is Keyword.Fun -> {
+                consume() // keyword
+                val identifier = current as? Token.Identifier ?: throwParseException("Expected identifier after function declaration: $token")
+                consume() // id
+                if (current !is Separator.LeftParen) throwParseException("Expected left parenthesis for parameters of function: $token")
+                consume() // left paren
+                val params = ArrayList<Token.Identifier>()
+                do {
+                    val right = current
+                    if (right !is Token.Identifier) throwParseException("Expected identifier in parameters of function: $identifier -> got $right")
+                    params.add(right)
+                    consume() // last param
+                    val comma = consume()
+                    if (comma is Separator.RightParen) break
+                    if (comma !is Separator.Comma) throwParseException("Expected comma after parameter '$right' in function declaration: $identifier")
+                } while (true)
+                return FunctionDefinition(identifier, params, parseBody("function ${identifier.name} at line ${identifier.line}"))
             }
-            is OfValue -> return parseValuable()
-            else -> throwParseException("Unhandled entry: $entry")
+            is Keyword.Return -> {
+                consume() // return
+                val value = parseExpression()
+                if (value !is OfValue) throwParseException("Expected some value after return")
+                return ReturnFunction(value)
+            }
+            is Keyword.If -> {
+                consume() // if
+                val left = consume()
+                if (left !is Separator.LeftParen) throwParseException("Expected left paren to start IF expression")
+                val condition = parseExpression()
+                val right = consume()
+                // if (right !is Separator.RightParen) throwParseException("Expected right paren to end IF expression")
+                if (condition !is OfValue) throwParseException("Expected condition to return true or false")
+                return IfStatement(condition, parseBody("If statement at line #${token.line}"))
+            }
+            // do I need this? Do I want to support it?
+            // is OfValue -> return parseValuable()
+            else -> throwParseException("Unhandled token: $token")
         }
     }
 
     private fun parseBody(function: String): List<Node> {
         val left = consume() // left paren
-        if (left !is Token.Separator || left.kind != SeparatorKind.LEFT_BRACE) throwParseException("Expected left brace to start body: $function")
+        if (left !is Separator.LeftBrace) throwParseException("Expected left brace to start body: $function")
         try {
             val body = ArrayList<Node>()
             do {
                 val next = current
                 // handle empty function body
-                if (next is Token.Separator && next.kind == SeparatorKind.RIGHT_BRACE) break
+                if (next is Separator.RightBrace) break
                 val line = parseStatement()
                 body.add(line)
-            } while (current !is Token.Separator)
+            } while (true)
             consume() // right brace
             return body
         }catch (p: ParseException) {
@@ -131,17 +130,18 @@ class Parser(
         }
     }
 
+
     private fun parseExpression(): Node {
         var left = parseTerm()
 
         while (true) {
             val token = current
-            if (token is Token.Operator) {
+            if (token is Operator) {
                 consume() // Consume the operator
                 val right = parseTerm()
                 if (right !is OfValue) throwParseException("Right side of expression does not yield a result")
                 if (left !is OfValue) throwParseException("Right side of expression does not yield a result")
-                left = BinaryExpression(left, token.kind, right)
+                left = BinaryExpression(left, token, right)
             } else {
                 break
             }
@@ -155,10 +155,10 @@ class Parser(
 
         while (true) {
             val token = current
-            if (token is Token.Operator && (token.kind == OperatorKind.MULTIPLY || token.kind == OperatorKind.DIVIDE)) {
+            if (token is Operator) {
                 consume() // Consume the operator
                 val right = parseValuable()
-                left = BinaryExpression(left, token.kind, right)
+                left = BinaryExpression(left, token, right)
             } else {
                 break
             }
@@ -169,7 +169,7 @@ class Parser(
 
     private fun parseValuable(): OfValue {
         return when (val token = current){
-            is Token.TemplateStringLiteral -> {
+            is Token.StringTemplate -> {
                 consume() // template
                 val values = ArrayList<OfValue>()
                 for (piece in token.tokens) {
@@ -196,19 +196,13 @@ class Parser(
             }
             is Token.Identifier -> {
                 consume() // id
-                when (val next = current){
-                    is Token.Separator -> {
-                        when (next.kind) {
-                            SeparatorKind.LEFT_PAREN -> {
-                                return parseFunctionInvocation(token)
-                            }
-                            else -> token
-                        }
+                when (current){
+                    is Separator.LeftParen -> {
+                        return parseFunctionInvocation(token)
                     }
                     else -> token
                 }
             }
-            is Token.Separator -> throwParseException("Expected value or expression, got a comma")
             else -> throwParseException("Unhandled valuable: $token")
         }
     }
@@ -216,10 +210,9 @@ class Parser(
     private fun parseFunctionInvocation(id: Token.Identifier): FunctionInvoke {
         consume() // left paren
         val args = ArrayList<OfValue>()
-        var first = true
         do {
             val cur = current
-            if (cur is Token.Separator && cur.kind == SeparatorKind.RIGHT_PAREN) {
+            if (cur is Separator.RightParen) {
                 consume()
                 break
             } // handle no arg function
@@ -227,8 +220,8 @@ class Parser(
             val comma = consume()
             if (arg !is OfValue) throwParseException("Expected expression in arguments of function $id")
             args.add(arg)
-            if (comma is Token.Separator && comma.kind == SeparatorKind.RIGHT_PAREN) break
-            if (!(comma is Token.Separator && comma.kind == SeparatorKind.COMMA)) throwParseException("Expected comma to delimit arguments in function $id")
+            if (comma is Separator.RightParen) break
+            if (comma !is Separator.Comma) throwParseException("Expected comma to delimit arguments in function $id")
         } while (true)
         return FunctionInvoke(id, args)
     }
@@ -238,16 +231,10 @@ class Parser(
         println(nodes)
         throw ParseException("At line #${current?.line} -> $msg", cause)
     }
-}
 
-class ParseTree(
-
-)
-
-interface ParseTreeBuilder {
-    fun addCond(f: (Token) -> Boolean): ParseTreeBuilder
-    fun addResult(f: (Token) -> Any): ParseTreeBuilder
-    fun build(): ParseTree
+    override fun debug(flag: DebugFlag?, message: () -> String) {
+        if (if (flag != null) debug.contains(flag) else true) platform.logger.info("[$flag] DEBUG: ${message()}")
+    }
 }
 
 /**
@@ -261,6 +248,11 @@ interface ParseTreeBuilder {
 interface Node
 
 /**
+ * A node that could return a value when evaluated
+ */
+interface OfValue: Node
+
+/**
  * A [Node] that has two sides and applies some operation to both.
  *
  * Binary expressions can be chained together, and the [Parser] does this
@@ -268,7 +260,7 @@ interface Node
  */
 data class BinaryExpression(
     val left: OfValue,
-    val operator: OperatorKind,
+    val operator: Operator,
     val right: OfValue
 ): Node, OfValue
 
@@ -308,6 +300,8 @@ data class FunctionDefinition(
         }
         return Unit
     }
+    private val cachedName = "DeclaredFunction_${function.name}(${parameters.joinToString { it.name }})"
+    override fun toString(): String = cachedName
 }
 
 /**
@@ -320,7 +314,7 @@ data class VariableAssignment(
 ): Node
 
 data class IfStatement(
-    val operand: OfValue, // should be a value of true or false, if not then not null
+    val condition: OfValue, // should be a value of true or false, if not then not null
     val body: List<Node>
 ): Node
 

@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "dev.hunter"
-version = "0.0.13"
+version = "0.0.14"
 
 kotlin {
     jvm {
@@ -26,7 +26,6 @@ kotlin {
     sourceSets {
         commonMain {
             dependencies {
-                implementation(libs.kotlin.reflect)
                 // implementation(compose.runtime)
                 // implementation(compose.material)
                 // implementation(compose.desktop.common)

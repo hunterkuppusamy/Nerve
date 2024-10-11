@@ -1,32 +1,38 @@
 package dev.hunter.nerve
 
+import dev.hunter.nerve.core.DebugFlag
 import dev.hunter.nerve.core.Interpreter
 import dev.hunter.nerve.core.Parser
 import dev.hunter.nerve.core.Tokenizer
+import java.util.*
 
 fun main() {
-    val tok = Tokenizer("""
+    val tok = Tokenizer(
+        """
         fun concat(string1, string2){
-            print('{string1} + {string2}')
+            print(
+                '{
+                    string1
+                } + {
+                    string2
+                }'
+            )
         }
         
         hello = "hello,"
         
         concat(hello, "world!")
         
-        fun coolPrint(thing) {
-            print('cool print: {thing}')
-            return thing
-        }
-        
         fun helloWorld(arg){ 
+            // this is a comment ;)
             if (arg == 1) {
                 print("arg = 1!")
                 if (true) {
                     print("this should be logged")
                 }
             } 
-            print('argument = {coolPrint(arg + 1)} !!') 
+            one = 1
+            print('argument = {arg - one} !!') 
         }
         
         helloWorld(1)
@@ -37,11 +43,12 @@ fun main() {
         
         print( y )
         
-    """.trimIndent().toCharArray()).tokenize()
+    """.trimIndent().toCharArray()
+    ).tokenize()
     val nodes = Parser(tok).parse()
     println(nodes)
-    val it = Interpreter()
-    it.interpret(nodes)
+    val it = Interpreter(debug = EnumSet(DebugFlag.STATE))
+    it.interpret(nodes)?.printStackTrace()
     // platform.entry()
 }
 
@@ -59,5 +66,6 @@ interface Logger {
     fun error(message: String)
 }
 
-internal val logger get() = platform.logger
-internal val debugLog get() = platform.logger
+internal interface CanDebug {
+    fun debug(flag: DebugFlag? = null, message: () -> String)
+}
