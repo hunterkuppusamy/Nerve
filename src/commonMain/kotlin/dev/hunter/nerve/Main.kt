@@ -66,7 +66,7 @@ fun main() {
         
     """.trimIndent().toCharArray()
     ).tokenize()
-    val nodes = Parser(tok).parse()
+    val nodes = Parser(tok, debug = EnumSet(DebugFlag.STATE)).parse()
     println(nodes)
     val it = Interpreter(debug = EnumSet(DebugFlag.STATE))
     it.interpret(nodes)?.printStackTrace()

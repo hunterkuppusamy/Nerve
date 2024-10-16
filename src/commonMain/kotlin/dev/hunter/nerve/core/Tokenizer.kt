@@ -37,7 +37,7 @@ open class Tokenizer(
      *
      * This array can be understood by the [Parser] to create a list of [Nodes][Node] to be interpreted by the [Interpreter]
      */
-    fun tokenize(): Array<Token> {
+    fun tokenize(): List<Token> {
         while(buf.hasRemaining()) {
             val c = buf.peek()
             if (c == '\n' || c == '\r') dropToNextLine()
@@ -47,7 +47,7 @@ open class Tokenizer(
             else if (c.isDigit()) lexNumber()
             else lexSpecial()
         }
-        return tokens.toTypedArray()
+        return tokens
     }
 
     private fun lexSpecial() {
@@ -145,7 +145,7 @@ open class Tokenizer(
         } else {
             if (literal.isNotBlank())
                 templateBuffer.add(Token.StringLiteral(line, literal))
-            tokens.add(Token.StringTemplate(line, templateBuffer.toTypedArray()))
+            tokens.add(Token.StringTemplate(line, templateBuffer))
             templateBuffer.clear()
         }
     }

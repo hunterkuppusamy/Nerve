@@ -3,6 +3,8 @@ package dev.hunter.nerve.core
 import dev.hunter.nerve.CanDebug
 import dev.hunter.nerve.EnumSet
 import dev.hunter.nerve.platform
+import java.nio.Buffer
+import kotlin.reflect.KClass
 
 /**
  * TODO for improving this version of the parser.
@@ -14,21 +16,12 @@ import dev.hunter.nerve.platform
  * 2.
  */
 class Parser(
-    private val tokens: Array<Token>,
+    tokens: List<Token>,
     private val debug: EnumSet<DebugFlag> = EnumSet()
 ): CanDebug {
+    private val buf: TokenBuffer = TokenBuffer(tokens)
     private var currentIndex = 0
-    private val current: Token? get() {
-        val ret = tokens.getOrNull(currentIndex)
-        return ret
-    }
     private val nodes = ArrayList<Node>()
-
-    private fun consume(): Token? {
-        val ret = current
-        currentIndex++
-        return ret
-    }
 
     /*
      * Parses the [tokens] into a collection of [nodes][Node].
@@ -39,28 +32,23 @@ class Parser(
      */
     fun parse(): Collection<Node> {
         do {
-            if (debug.contains(DebugFlag.STATE)){
-                println("starting new statement at -> #${current?.line} ${current.toString()}")
-            }
+            debug(DebugFlag.STATE) { "starting new statement at -> #${buf.peek<Token>().line} ${buf.peek<Token>()}" }
             val node = parseStatement()
             nodes.add(node)
-        } while (currentIndex < tokens.size)
+        } while (buf.pos <= buf.size)
         return nodes
     }
 
     private fun parseStatement(): Node {
-        when (val token = current){
+        when (val token = buf.get<Token>()){
             is Token.Identifier -> {
-                consume() // consume id
-                when (val next = current){
+                when (val next = buf.get<Token>()){
                     is Operator.Assign -> {
-                        consume() // consume assignment
                         val expr = parseExpression()
                         if (expr !is OfValue) throwParseException("Expected yielding expression for variable assignment")
                         return VariableAssignment(token, expr)
                     }
                     is Operator -> {
-                        consume() // consume assignment
                         val expr = parseExpression()
                         if (expr !is OfValue) throwParseException("Expected yielding value for variable modification")
                         return BinaryExpression(token, next, expr)
@@ -72,36 +60,27 @@ class Parser(
                 }
             }
             is Keyword.Fun -> {
-                consume() // keyword
-                val identifier = current as? Token.Identifier ?: throwParseException("Expected identifier after function declaration: $token")
-                consume() // id
-                if (current !is Separator.LeftParen) throwParseException("Expected left parenthesis for parameters of function: $token")
-                consume() // left paren
+                val identifier = buf.get<Token.Identifier>("Expected identifier after function declaration")
+                buf.get<Separator.LeftParen>("Expected left parenthesis for parameters of function")
                 val params = ArrayList<Token.Identifier>()
                 do {
-                    val right = current
-                    if (right !is Token.Identifier) throwParseException("Expected identifier in parameters of function: $identifier -> got $right")
+                    val right = buf.get<Token.Identifier>("Expected identifier in parameters of function '$identifier'")
                     params.add(right)
-                    consume() // last param
-                    val comma = consume()
+                    val comma = buf.get<Separator>(msg = "Expected separator after function parameter")
                     if (comma is Separator.RightParen) break
                     if (comma !is Separator.Comma) throwParseException("Expected comma after parameter '$right' in function declaration: $identifier")
                 } while (true)
                 return FunctionDefinition(identifier, params, parseBody("function ${identifier.name} at line ${identifier.line}"))
             }
             is Keyword.Return -> {
-                consume() // return
                 val value = parseExpression()
                 if (value !is OfValue) throwParseException("Expected some value after return")
                 return ReturnFunction(value)
             }
             is Keyword.If -> {
-                consume() // if
-                val left = consume()
-                if (left !is Separator.LeftParen) throwParseException("Expected left paren to start IF expression: $left")
+                buf.get<Separator.LeftParen>("Expected left paren to start IF expression")
                 val condition = parseExpression()
-                val right = consume()
-                if (right !is Separator.RightParen) throwParseException("Expected right paren to end IF expression: $right")
+                buf.get<Separator.RightParen>("Expected right paren to start IF expression")
                 if (condition !is OfValue) throwParseException("Expected condition to return true or false")
                 return IfStatement(condition, parseBody("If statement at line #${token.line}"))
             }
@@ -112,18 +91,17 @@ class Parser(
     }
 
     private fun parseBody(function: String): List<Node> {
-        val left = consume() // left paren
-        if (left !is Separator.LeftBrace) throwParseException("Expected left brace to start body: $left")
+        buf.get<Separator.LeftBrace>("Expected left brace to start body")
         try {
             val body = ArrayList<Node>()
             do {
-                val next = current
+                val next = buf.peek<Token>()
                 // handle empty function body
                 if (next is Separator.RightBrace) break
                 val line = parseStatement()
                 body.add(line)
             } while (true)
-            consume() // right brace
+            buf.get<Separator.RightBrace>("SEVERE ERROR")
             return body
         }catch (p: ParseException) {
             throwParseException(function, p)
@@ -135,9 +113,9 @@ class Parser(
         var left = parseTerm()
 
         while (true) {
-            val token = current
+            val token = buf.peek<Token>()
             if (token is Operator) {
-                consume() // Consume the operator
+                buf.get<Operator>() // Consume the operator
                 val right = parseTerm()
                 if (right !is OfValue) throwParseException("Right side of expression does not yield a result")
                 if (left !is OfValue) throwParseException("Right side of expression does not yield a result")
@@ -154,9 +132,9 @@ class Parser(
         var left = parseValuable()
 
         while (true) {
-            val token = current
+            val token = buf.peek<Token>()
             if (token is Operator) {
-                consume() // Consume the operator
+                buf.get<Operator>() // Consume the operator
                 val right = parseValuable()
                 left = BinaryExpression(left, token, right)
             } else {
@@ -168,16 +146,15 @@ class Parser(
     }
 
     private fun parseValuable(): OfValue {
-        return when (val token = current){
+        return when (val token = buf.get<Token>()){
             is Token.StringTemplate -> {
-                consume() // template
                 val values = ArrayList<OfValue>()
                 for (piece in token.tokens) {
                     when (piece) {
-                        is Array<*> -> {
+                        is List<*> -> {
                             val node = Parser(
-                                piece as? Array<Token>
-                                    ?: throw IllegalStateException("Somehow there is an array of something other than tokens: ${piece::class.simpleName}"),
+                                piece as? List<Token>
+                                    ?: throw IllegalStateException("Somehow there is an list of something other than tokens: ${piece::class.simpleName}"),
                                 debug
                             ).parseExpression()
                             if (node !is OfValue) throwParseException("Expression in string template does not have a value: $node")
@@ -190,48 +167,45 @@ class Parser(
                 }
                 TemplateString(values)
             }
-            is Constant -> {
-                consume()
-                token
-            }
+            is Constant -> token
             is Token.Identifier -> {
-                consume() // id
-                when (current){
+                when (buf.peek<Token>()){
                     is Separator.LeftParen -> {
+                        buf.get<Separator.LeftParen>()
                         return parseFunctionInvocation(token)
                     }
                     else -> token
                 }
             }
-            is Keyword.Null -> {
-                consume()
-                token
-            }
+            is Keyword.Null -> token
             else -> throwParseException("Unhandled valuable: $token")
         }
     }
 
     private fun parseFunctionInvocation(id: Token.Identifier): FunctionInvoke {
-        consume() // left paren
         val args = ArrayList<OfValue>()
-        do {
-            val cur = current
-            if (cur is Separator.RightParen) {
-                consume()
-                break
-            } // handle no arg function
-            val arg = parseExpression()
-            val comma = consume()
-            if (arg !is OfValue) throwParseException("Expected expression in arguments of function $id")
-            args.add(arg)
-            if (comma is Separator.RightParen) break
-            if (comma !is Separator.Comma) throwParseException("Expected comma to delimit arguments in function $id")
-        } while (true)
+        try {
+            do {
+                val cur = buf.peek<Token>()
+                if (cur is Separator.RightParen) {
+                    buf.get<Token>()
+                    break
+                } // handle no arg function
+                val arg = parseExpression()
+                val comma = buf.get<Token>()
+                if (arg !is OfValue) throwParseException("Expected expression in arguments of function $id")
+                args.add(arg)
+                if (comma is Separator.RightParen) break
+                if (comma !is Separator.Comma) throwParseException("Expected comma to delimit arguments in function $id")
+            } while (true)
+        } catch (t: Throwable) {
+            throwParseException("Function invocation '$id'", t)
+        }
         return FunctionInvoke(id, args)
     }
 
     private fun throwParseException(msg: String, cause: Throwable? = null): Nothing {
-        throw ParseException("At line #${current?.line} -> $msg", cause)
+        throw ParseException("At line #${buf.peek<Token>().line} -> $msg", cause)
     }
 
     override fun debug(flag: DebugFlag?, message: () -> String) {
@@ -239,96 +213,40 @@ class Parser(
     }
 }
 
-/**
- * A node in the [Abstract Syntax Tree] that forms the syntax of my language.
- *
- * A node has no defined structure by itself, but the structure is formed when the [Parser]
- * constructs an implementation of [Node].
- *
- * Then, the [Interpreter] must implement some way to handle any node.
- */
-interface Node
+class TokenBuffer(
+    arr: Collection<Token>
+) {
+    private val _arr = ArrayList(arr)
+    private var _index = 0
+    val size get() = _arr.size
+    val pos get() = _index
 
-/**
- * A node that could return a value when evaluated
- */
-interface OfValue: Node
-
-/**
- * A [Node] that has two sides and applies some operation to both.
- *
- * Binary expressions can be chained together, and the [Parser] does this
- * in [Parser.parseExpression] and [Parser.parseTerm]
- */
-data class BinaryExpression(
-    val left: OfValue,
-    val operator: Operator,
-    val right: OfValue
-): Node, OfValue
-
-/**
- * A [Node] that describes the invocation of a function with some arguments
- */
-data class FunctionInvoke(
-    val function: Token.Identifier,
-    val arguments: List<Node>
-): Node, OfValue
-
-data class TemplateString(
-    val line: List<OfValue>
-): Node, OfValue
-
-/**
- * A [Node] that denotes the definition of a new function with an [Identifier][Token.Identifier], Parameters,
- * and a body.
- *
- * Can be [invoked][Function.invoke0] just as [built-in functions][BuiltInFunctions] can.
- */
-data class FunctionDefinition(
-    val function: Token.Identifier,
-    val parameters: List<Token.Identifier>,
-    val body: List<Node>
-): Function(), Node {
-    override fun invoke0(localScope: ExecutionScope, args: List<Any?>): Any? {
-        for ((i, arg) in parameters.withIndex()) {
-            localScope.setVar(arg, args[i])
-        }
-        for (node in body) {
-            if (node is ReturnFunction) {
-                return if (node.variable is Token.Identifier) localScope.getVar(node.variable)
-                else localScope.computeValuable(node.variable)
-            }
-            localScope.interpret(node)
-        }
-        return Unit
+    fun move(offset: Int) {
+        _index += offset
     }
-    private val cachedName = "DeclaredFunction_${function.name}(${parameters.joinToString { it.name }})"
-    override fun toString(): String = cachedName
+
+    fun <T: Any> get(clazz: KClass<T>, offset: Int = 0, msg: String? = null): T {
+        val pos = _index + offset
+        if (pos < 0) throw IllegalArgumentException("Out of bounds access with index $_index and offset $offset")
+        if (pos >= _arr.size) throw IllegalArgumentException("End of buffer reached with index $_index and offset $offset")
+        val c = _arr[pos]
+        _index++
+        if (!clazz.isInstance(c)) throw UnexpectedTokenException(msg ?: "Unexpected token $c")
+        @Suppress("UNCHECKED_CAST") // I just check it
+        return c as T
+    }
+
+    inline fun <reified T: Token> get(msg: String? = null): T {
+        return get(T::class, 0, msg)
+    }
+
+    inline fun <reified T: Token> peek(offset: Int = 0, msg: String? = null): T {
+        val ret = get(T::class, offset, msg)
+        move(-1)
+        return ret
+    }
+
+    class UnexpectedTokenException(msg: String): Exception(msg)
 }
-
-/**
- * A [Node] that describes the assignment of some [variable][Token.Identifier],
- * to a value.
- */
-data class VariableAssignment(
-    val variable: Token.Identifier,
-    val expression: OfValue
-): Node
-
-data class IfStatement(
-    val condition: OfValue, // should be a value of true or false, if not then not null
-    val body: List<Node>
-): Node
-
-/**
- * A [Node] that describes the returning of some value in a function.
- *
- * It is possible that in the future this node ends the execution of the [GlobalExecutionScope]
- */
-data class ReturnFunction(
-    val variable: OfValue
-): Node
-
-object BreakStatement: Node
 
 class ParseException(message: String, override val cause: Throwable?) : Exception(message)

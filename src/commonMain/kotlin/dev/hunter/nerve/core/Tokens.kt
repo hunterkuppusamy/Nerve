@@ -3,7 +3,7 @@ package dev.hunter.nerve.core
 sealed class Token {
     abstract val line: Int
     data class Identifier(override val line: Int, val name: String): Token(), OfValue
-    class StringTemplate(override val line: Int, val tokens: Array<Any> /* terrible move */): Token(), OfValue // not a data class because of the array
+    class StringTemplate(override val line: Int, val tokens: List<Any> /* terrible move */): Token(), OfValue // not a data class because of the array
     data class StringLiteral(override val line: Int, override val value: String): Token(), Constant
     data class NaturalLiteral(override val line: Int, override val value: Long): Token(), Constant
     data class FloatingLiteral(override val line: Int, override val value: Double): Token(), Constant
@@ -13,7 +13,7 @@ sealed class Token {
         return when (this) {
             is Identifier -> "|$name|"
             is Constant -> "'$value'"
-            is StringTemplate -> "StringTemplate[${tokens.contentDeepToString()}]"
+            is StringTemplate -> "StringTemplate[$tokens]"
             else -> this::class.simpleName ?: (this as Any).toString()
         }
     }
