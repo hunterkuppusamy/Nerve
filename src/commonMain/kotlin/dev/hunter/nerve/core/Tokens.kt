@@ -2,70 +2,74 @@ package dev.hunter.nerve.core
 
 sealed class Token {
     abstract val line: Int
-    data class Identifier(override val line: Int, val name: String): Token(), OfValue
-    class StringTemplate(override val line: Int, val tokens: List<Any> /* terrible move */): Token(), OfValue // not a data class because of the array
-    data class StringLiteral(override val line: Int, override val value: String): Token(), Constant
-    data class NaturalLiteral(override val line: Int, override val value: Long): Token(), Constant
-    data class FloatingLiteral(override val line: Int, override val value: Double): Token(), Constant
-    data class BooleanLiteral(override val line: Int, override val value: Boolean): Token(), Constant
-
-    override fun toString(): String {
-        return when (this) {
-            is Identifier -> "|$name|"
-            is Constant -> "'$value'"
-            is StringTemplate -> "StringTemplate[$tokens]"
-            else -> this::class.simpleName ?: (this as Any).toString()
-        }
+    class Identifier(override val line: Int, val name: String): Token(), OfValue{
+        override fun toString(): String = "|$name|"
+    }
+    class StringTemplate(override val line: Int, val tokens: List<Any> /* terrible move */): Token(), OfValue {// not a data class because of the array
+        private val _cachedString = ">$tokens<"
+        override fun toString(): String = _cachedString
     }
 }
 
-sealed class Separator: Token(){
-    data class LeftParen(override val line: Int): Separator()
-    data class RightParen(override val line: Int): Separator()
-    data class LeftBrace(override val line: Int): Separator()
-    data class RightBrace(override val line: Int): Separator()
-    data class LeftBracket(override val line: Int): Separator()
-    data class RightBracket(override val line: Int): Separator()
-    data class Comma(override val line: Int): Separator()
-
-    override fun toString(): String {
-        // return this::class.simpleName!!
-        return when (this) {
-            is LeftParen -> "'('"
-            is RightParen -> "')'"
-            is LeftBrace -> "'{'"
-            is RightBrace -> "'}'"
-            is LeftBracket -> "'['"
-            is RightBracket -> "']'"
-            is Comma -> "','"
-        }
+/**
+ * A node that is [OfValue] whose value is computed during 'compile time',
+ * or in this case [tokenization][Tokenizer] time
+ */
+sealed class Constant: Token(), OfValue {
+    class StringLiteral(override val line: Int, override val value: String): Constant() {
+        override fun toString(): String = "\"$value\""
     }
+    class NaturalLiteral(override val line: Int, override val value: Long): Constant()
+    class FloatingLiteral(override val line: Int, override val value: Double): Constant()
+    class BooleanLiteral(override val line: Int, override val value: Boolean): Constant()
+
+    abstract val value: Any
+
+    override fun toString(): String = "'$value'"
 }
 
-sealed class Operator: Token() {
-    data class Add(override val line: Int): Operator()
-    data class Subtract(override val line: Int): Operator()
-    data class Divide(override val line: Int): Operator()
-    data class Multiply(override val line: Int): Operator()
-    data class Exponentiate(override val line: Int): Operator()
-    data class Modulate(override val line: Int): Operator()
-    data class Assign(override val line: Int): Operator()
-    data class IsEqual(override val line: Int): Operator()
-    data class IsNotEqual(override val line: Int): Operator()
-    data class IsGreaterThan(override val line: Int): Operator()
-    data class IsLessThan(override val line: Int): Operator()
+sealed class Separator(private val str: String): Token(){
+    class LeftParen(override val line: Int): Separator("(")
+    class RightParen(override val line: Int): Separator(")")
+    class LeftBrace(override val line: Int): Separator("{")
+    class RightBrace(override val line: Int): Separator("}")
+    class LeftBracket(override val line: Int): Separator("[")
+    class RightBracket(override val line: Int): Separator("]")
+    class Comma(override val line: Int): Separator(",")
+
+    override fun toString(): String = "<$str>"
+}
+
+sealed class Operator(private val str: String): Token() {
+    class Add(override val line: Int): Operator("+")
+    class Subtract(override val line: Int): Operator("-")
+    class Divide(override val line: Int): Operator("/")
+    class Multiply(override val line: Int): Operator("*")
+    class Exponentiate(override val line: Int): Operator("^")
+    class Modulate(override val line: Int): Operator("%")
+    class Assign(override val line: Int): Operator("=")
+    class IsEqual(override val line: Int): Operator("==")
+    class IsNotEqual(override val line: Int): Operator("!=")
+    class IsGreaterThan(override val line: Int): Operator(">")
+    class IsLessThan(override val line: Int): Operator("<")
+
+    override fun toString(): String = "[$str]"
 }
 
 sealed class Keyword: Token(){
-    data class If(override val line: Int): Keyword()
-    data class While(override val line: Int): Keyword()
-    data class Do(override val line: Int): Keyword()
-    data class Return(override val line: Int): Keyword()
-    data class Break(override val line: Int): Keyword()
-    data class Continue(override val line: Int): Keyword()
-    data class Fun(override val line: Int): Keyword()
-    data class Else(override val line: Int): Keyword()
-    data class Null(override val line: Int): Keyword(), OfValue
+    class If(override val line: Int): Keyword()
+    class While(override val line: Int): Keyword()
+    class Do(override val line: Int): Keyword()
+    class Return(override val line: Int): Keyword()
+    class Break(override val line: Int): Keyword()
+    class Continue(override val line: Int): Keyword()
+    class Fun(override val line: Int): Keyword()
+    class Else(override val line: Int): Keyword()
+    class Null(override val line: Int): Keyword(), OfValue
+
+    private val _cachedName = "\$${this::class.simpleName!!.uppercase()}\$"
+
+    override fun toString(): String = _cachedName
 
     companion object{
         fun byName(name: String, line: Int): Keyword? {
@@ -87,11 +91,3 @@ sealed class Keyword: Token(){
 
 const val TEMPLATE_START_CHAR = '{'
 const val TEMPLATE_END_CHAR = '}'
-
-/**
- * A node that is OfValue whose value is computed during 'compile time',
- * or in this case tokenization time
- */
-interface Constant: OfValue {
-    val value: Any
-}

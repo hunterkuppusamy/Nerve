@@ -31,11 +31,16 @@ class Parser(
      * Nodes are interpreted by the [Interpreter] to provide functionality
      */
     fun parse(): Collection<Node> {
-        do {
-            debug(DebugFlag.STATE) { "starting new statement at -> #${buf.peek<Token>().line} ${buf.peek<Token>()}" }
-            val node = parseStatement()
-            nodes.add(node)
-        } while (buf.pos <= buf.size)
+        try{
+            do {
+                debug(DebugFlag.STATE) { "starting new statement at -> #${buf.peek<Token>()?.line} ${buf.peek<Token>()}" }
+                val node = parseStatement()
+                nodes.add(node)
+            } while (buf.pos < buf.size)
+        }catch (t: Throwable){
+            println(nodes)
+            throw RuntimeException(t)
+        }
         return nodes
     }
 
@@ -146,10 +151,11 @@ class Parser(
     }
 
     private fun parseValuable(): OfValue {
-        return when (val token = buf.get<Token>()){
+        val ret = when (val token = buf.get<Token>()){
             is Token.StringTemplate -> {
                 val values = ArrayList<OfValue>()
                 for (piece in token.tokens) {
+                    debug(DebugFlag.STATE) { "Piece is $piece" }
                     when (piece) {
                         is List<*> -> {
                             val node = Parser(
@@ -165,11 +171,13 @@ class Parser(
                         else -> throw IllegalArgumentException("arr = [$piece] : ${piece::class.simpleName}")
                     }
                 }
+                debug(DebugFlag.STATE) { "Template result -> $values" }
                 TemplateString(values)
             }
             is Constant -> token
             is Token.Identifier -> {
-                when (buf.peek<Token>()){
+                val temp = buf.peek<Token>()
+                when (temp){
                     is Separator.LeftParen -> {
                         buf.get<Separator.LeftParen>()
                         return parseFunctionInvocation(token)
@@ -180,6 +188,7 @@ class Parser(
             is Keyword.Null -> token
             else -> throwParseException("Unhandled valuable: $token")
         }
+        return ret
     }
 
     private fun parseFunctionInvocation(id: Token.Identifier): FunctionInvoke {
@@ -205,7 +214,7 @@ class Parser(
     }
 
     private fun throwParseException(msg: String, cause: Throwable? = null): Nothing {
-        throw ParseException("At line #${buf.peek<Token>().line} -> $msg", cause)
+        throw ParseException("At line #${buf.peek<Token>()?.line} -> $msg", cause)
     }
 
     override fun debug(flag: DebugFlag?, message: () -> String) {
@@ -240,8 +249,8 @@ class TokenBuffer(
         return get(T::class, 0, msg)
     }
 
-    inline fun <reified T: Token> peek(offset: Int = 0, msg: String? = null): T {
-        val ret = get(T::class, offset, msg)
+    inline fun <reified T: Token> peek(offset: Int = 0, msg: String? = null): T? {
+        val ret = try{ get(T::class, offset, msg) } catch (_: IllegalArgumentException) { null }
         move(-1)
         return ret
     }

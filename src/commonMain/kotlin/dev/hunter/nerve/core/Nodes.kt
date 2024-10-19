@@ -25,7 +25,9 @@ data class BinaryExpression(
     val left: OfValue,
     val operator: Operator,
     val right: OfValue
-): Node, OfValue
+): Node, OfValue {
+    override fun toString(): String = "BinaryExpression($left $operator $right)"
+}
 
 /**
  * A [Node] that describes the invocation of a function with some arguments
@@ -33,11 +35,15 @@ data class BinaryExpression(
 data class FunctionInvoke(
     val function: Token.Identifier,
     val arguments: List<Node>
-): Node, OfValue
+): Node, OfValue {
+    override fun toString(): String = "FunctionInvoke(${function.name}$arguments)"
+}
 
 data class TemplateString(
     val line: List<OfValue>
-): Node, OfValue
+): Node, OfValue{
+    override fun toString(): String = "TemplateString($line)"
+}
 
 /**
  * A [Node] that denotes the definition of a new function with an [Identifier][Token.Identifier], Parameters,
@@ -63,7 +69,7 @@ data class FunctionDefinition(
         }
         return Unit
     }
-    private val cachedName = "DeclaredFunction_${function.name}(${parameters.joinToString { it.name }})"
+    private val cachedName = "DeclaredFunction(${function.name}[${parameters.joinToString { it.name }}])"
     override fun toString(): String = cachedName
 }
 
@@ -74,12 +80,16 @@ data class FunctionDefinition(
 data class VariableAssignment(
     val variable: Token.Identifier,
     val expression: OfValue
-): Node
+): Node {
+    override fun toString(): String = "VariableAssignment(${variable} = $expression)"
+}
 
 data class IfStatement(
     val condition: OfValue, // should be a value of true or false, if not then not null
     val body: List<Node>
-): Node
+): Node {
+    override fun toString(): String = "IfStatement(${condition} -> [${body.joinToString(", ")}])"
+}
 
 /**
  * A [Node] that describes the returning of some value in a function.
@@ -88,6 +98,8 @@ data class IfStatement(
  */
 data class ReturnFunction(
     val variable: OfValue
-): Node
+): Node {
+    override fun toString(): String = "ReturnFunction($variable)"
+}
 
-object BreakStatement: Node
+data object BreakStatement: Node

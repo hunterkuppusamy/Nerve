@@ -56,7 +56,7 @@ abstract class ExecutionScope{
                 is IfStatement -> {
                     val op =
                         // optimised evaluation of literals
-                        if ((node.condition as? Token.NaturalLiteral)?.value == 1L || (node.condition as? Token.BooleanLiteral)?.value == true) true
+                        if ((node.condition as? Constant.NaturalLiteral)?.value == 1L || (node.condition as? Constant.BooleanLiteral)?.value == true) true
                         else {
                             val value = computeValuable(node.condition)
                             value as? Boolean ?: (value as? Number == 1)

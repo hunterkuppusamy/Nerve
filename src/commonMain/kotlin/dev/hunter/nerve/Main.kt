@@ -22,6 +22,8 @@ fun main() {
         
         concat(hello, "world!")
         
+        concat(hello, "asd")
+        
         fun helloWorld(arg){ 
             // this is a comment ;)
             if (arg == 1) {
@@ -66,9 +68,9 @@ fun main() {
         
     """.trimIndent().toCharArray()
     ).tokenize()
+    println(tok)
     val nodes = Parser(tok, debug = EnumSet(DebugFlag.STATE)).parse()
-    println(nodes)
-    val it = Interpreter(debug = EnumSet(DebugFlag.STATE))
+    val it = Interpreter(debug = EnumSet(DebugFlag.STATE, DebugFlag.TIMINGS))
     it.interpret(nodes)?.printStackTrace()
     println("Interpreted in ${it.time}")
     // platform.entry()

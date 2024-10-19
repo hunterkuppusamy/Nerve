@@ -103,7 +103,7 @@ open class Tokenizer(
         }
         val literal = literalBuffer.toString()
         literalBuffer.clear()
-        val token = if (isFloating) Token.FloatingLiteral(line, literal.toDouble()) else Token.NaturalLiteral(
+        val token = if (isFloating) Constant.FloatingLiteral(line, literal.toDouble()) else Constant.NaturalLiteral(
             line,
             literal.toLong()
         )
@@ -125,7 +125,7 @@ open class Tokenizer(
                 isTemplate = true
                 val literal = literalBuffer.toString()
                 literalBuffer.clear()
-                if (literal.isNotBlank()) templateBuffer.add(Token.StringLiteral(line, literal))
+                if (literal.isNotBlank()) templateBuffer.add(Constant.StringLiteral(line, literal))
                 val chars = CharBuilder()
                 do {
                     val t = buf.consume()
@@ -141,11 +141,11 @@ open class Tokenizer(
         val literal = literalBuffer.toString()
         literalBuffer.clear()
         if (!isTemplate) {
-            tokens.add(Token.StringLiteral(line, literal))
+            tokens.add(Constant.StringLiteral(line, literal))
         } else {
             if (literal.isNotBlank())
-                templateBuffer.add(Token.StringLiteral(line, literal))
-            tokens.add(Token.StringTemplate(line, templateBuffer))
+                templateBuffer.add(Constant.StringLiteral(line, literal))
+            tokens.add(Token.StringTemplate(line, ArrayList(templateBuffer)))
             templateBuffer.clear()
         }
     }
@@ -181,10 +181,10 @@ open class Tokenizer(
         val ident = literalBuffer.toString()
         literalBuffer.clear()
         if (ident == "false") {
-            tokens.add(Token.BooleanLiteral(line, false))
+            tokens.add(Constant.BooleanLiteral(line, false))
             return
         } else if (ident == "true") {
-            tokens.add(Token.BooleanLiteral(line, true))
+            tokens.add(Constant.BooleanLiteral(line, true))
             return
         }
         val token = Keyword.byName(ident, line) ?: Token.Identifier(line, ident)
