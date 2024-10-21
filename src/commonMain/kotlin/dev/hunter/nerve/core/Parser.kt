@@ -71,7 +71,7 @@ class Parser(
                 do {
                     val right = buf.get<Token.Identifier>("Expected identifier in parameters of function '$identifier'")
                     params.add(right)
-                    val comma = buf.get<Separator>(msg = "Expected separator after function parameter")
+                    val comma = buf.get<Separator>(msg = "Expected either comma or right parenthesis after function parameter")
                     if (comma is Separator.RightParen) break
                     if (comma !is Separator.Comma) throwParseException("Expected comma after parameter '$right' in function declaration: $identifier")
                 } while (true)
@@ -207,6 +207,13 @@ class Parser(
                 if (comma is Separator.RightParen) break
                 if (comma !is Separator.Comma) throwParseException("Expected comma to delimit arguments in function $id")
             } while (true)
+            val call = FunctionRegistry.entries[id.name]
+            if (call != null) { // compile time checking if possible
+                for ((i, param) in call.params.withIndex()) {
+                    val arg = args[i] // an argument is allowed to be null or nonexistent, the function will handle that
+
+                }
+            }
         } catch (t: Throwable) {
             throwParseException("Function invocation '$id'", t)
         }

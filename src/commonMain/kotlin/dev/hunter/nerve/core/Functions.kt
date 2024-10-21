@@ -26,13 +26,13 @@ abstract class Function{
             throw RuntimeException("Within $this", t)
         }
     }
-    override fun toString(): String = "Function_${this::class.simpleName}(...)"
+    override fun toString(): String = "Function[${this::class.simpleName}(...)]"
     protected abstract fun invoke0(localScope: ExecutionScope, args: List<Any?>): Any?
 }
 
 abstract class DelegateFunction(
     val name: String,
-    private val params: Array<out KClass<out Any>>
+    val params: Array<out KClass<out Any>>
 ): Function() {
     final override fun invoke0(localScope: ExecutionScope, args: List<Any?>): Any? {
         val ret: Any?
@@ -47,13 +47,13 @@ abstract class DelegateFunction(
         return ret
     }
     abstract fun handle(scope: ExecutionScope, args: List<Any?>): Any?
-    private val cachedName = "DelegatedFunction_${name}(${params.joinToString { it.simpleName ?: "null" }})"
+    private val cachedName = "DelegatedFunction[$name(${params.joinToString { it.simpleName ?: "Anonymous Object" }})]"
     final override fun toString(): String = cachedName
 }
 
 object FunctionRegistry {
     private val _entries = HashMap<String, DelegateFunction>()
-    val entries: Map<String, Function> get() = _entries
+    val entries: Map<String, DelegateFunction> get() = _entries
 
     fun register(function: DelegateFunction) {
         val prev = entries[function.name]
@@ -61,7 +61,13 @@ object FunctionRegistry {
         _entries[function.name] = function
     }
 
-    fun register(name: String, params: Array<KClass<Any>>, f: (ExecutionScope, List<Any?>) -> Any?) {
+    /**
+     * Optional arguments are passed in as null.
+     * [params] requires all possible expected parameters.
+     *
+     * If the passed in parameters ever exceeds the number of elements in the [params] array, the function call fails
+     */
+    fun register(name: String, params: Array<KClass<out Any>>, f: (ExecutionScope, List<Any?>) -> Any?) {
         val function = object: DelegateFunction(name, params) {
             override fun handle(scope: ExecutionScope, args: List<Any?>): Any? = f(scope, args)
         }

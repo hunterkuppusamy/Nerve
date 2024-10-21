@@ -48,7 +48,9 @@ abstract class ExecutionScope{
             when (node){
                 is OfValue -> computeValuable(node)
                 is VariableAssignment -> {
-                    setVar(node.variable, computeValuable(node.expression))
+                    val v = computeValuable(node.expression)
+                    if (v === Unit) throw RuntimeException("Function does not return")
+                    setVar(node.variable, v)
                 }
                 is FunctionDefinition -> {
                     functions[node.function.name] = node
@@ -151,7 +153,8 @@ abstract class ExecutionScope{
             else throw RuntimeException("Invoked with wrong parameters? Parse error? $invoke")
         }
         val func = functions[invoke.function.name] ?: throw RuntimeException("Function '${invoke.function.name}' is undefined")
-        return func.invoke(this, args)
+        return try { func.invoke(this, args) }
+        catch (t: Throwable) { throw RuntimeException("Invocation of $func", t) }
     }
 
     fun setVar(id: Token.Identifier, value: Any?){
