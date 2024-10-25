@@ -56,7 +56,7 @@ data class FunctionDefinition(
     val parameters: List<Token.Identifier>,
     val body: List<Node>
 ): Function(), Node {
-    override fun invoke0(localScope: ExecutionScope, args: List<Any?>): Any? {
+    override suspend fun invoke0(localScope: ExecutionScope, args: List<Any?>): Any? {
         for ((i, arg) in parameters.withIndex()) {
             localScope.setVar(arg, args[i])
         }

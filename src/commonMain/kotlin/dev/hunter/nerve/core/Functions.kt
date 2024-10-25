@@ -17,7 +17,7 @@ import kotlin.time.measureTime
 @ApiStatus.Internal
 @ApiStatus.NonExtendable
 abstract class Function{
-    fun invoke(scope: ExecutionScope, args: List<Any?>): Any? {
+    suspend fun invoke(scope: ExecutionScope, args: List<Any?>): Any? {
         try{
             val local = LocalExecutionScope(scope)
             val ret: Any? = invoke0(local, args)
@@ -27,14 +27,14 @@ abstract class Function{
         }
     }
     override fun toString(): String = "Function[${this::class.simpleName}(...)]"
-    protected abstract fun invoke0(localScope: ExecutionScope, args: List<Any?>): Any?
+    protected abstract suspend fun invoke0(localScope: ExecutionScope, args: List<Any?>): Any?
 }
 
 abstract class DelegateFunction(
     val name: String,
     val params: Array<out KClass<out Any>>
 ): Function() {
-    final override fun invoke0(localScope: ExecutionScope, args: List<Any?>): Any? {
+    final override suspend fun invoke0(localScope: ExecutionScope, args: List<Any?>): Any? {
         val ret: Any?
         val elapsed = measureTime {
             for ((i, a) in args.withIndex()) {
@@ -46,7 +46,7 @@ abstract class DelegateFunction(
         localScope.time += elapsed
         return ret
     }
-    abstract fun handle(scope: ExecutionScope, args: List<Any?>): Any?
+    abstract suspend fun handle(scope: ExecutionScope, args: List<Any?>): Any?
     private val cachedName = "DelegatedFunction[$name(${params.joinToString { it.simpleName ?: "Anonymous Object" }})]"
     final override fun toString(): String = cachedName
 }
@@ -69,7 +69,7 @@ object FunctionRegistry {
      */
     fun register(name: String, params: Array<KClass<out Any>>, f: (ExecutionScope, List<Any?>) -> Any?) {
         val function = object: DelegateFunction(name, params) {
-            override fun handle(scope: ExecutionScope, args: List<Any?>): Any? = f(scope, args)
+            override suspend fun handle(scope: ExecutionScope, args: List<Any?>): Any? = f(scope, args)
         }
         register(function)
     }
@@ -85,9 +85,9 @@ object FunctionRegistry {
 sealed class StandardFunction(
     name: String,
     vararg params: KClass<out Any>,
-    val exec: (ExecutionScope, List<Any?>) -> Any?
+    val exec: suspend (ExecutionScope, List<Any?>) -> Any?
 ): DelegateFunction(name, params) {
-    override fun handle(scope: ExecutionScope, args: List<Any?>): Any? = exec(scope, args)
+    override suspend fun handle(scope: ExecutionScope, args: List<Any?>): Any? = exec(scope, args)
     data object Print: StandardFunction("print", Any::class, exec =
     { scope, args ->
         val str = args.getOrNull(0)

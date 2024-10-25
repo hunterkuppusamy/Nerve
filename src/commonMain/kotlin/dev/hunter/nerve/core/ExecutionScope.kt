@@ -43,7 +43,7 @@ abstract class ExecutionScope{
     /**
      * Interpret a [Node]
      */
-    fun interpret(node: Node){
+    suspend fun interpret(node: Node){
         val elapsed = measureTime {
             when (node){
                 is OfValue -> computeValuable(node)
@@ -76,7 +76,7 @@ abstract class ExecutionScope{
         time += elapsed
     }
 
-    fun computeValuable(node: OfValue): Any? {
+    suspend fun computeValuable(node: OfValue): Any? {
         return when (node) {
             is FunctionInvoke -> computeInvocation(node)
             is Constant -> node.value
@@ -96,7 +96,7 @@ abstract class ExecutionScope{
         }
     }
 
-    fun computeBinaryExpression(node: BinaryExpression): Any {
+    suspend fun computeBinaryExpression(node: BinaryExpression): Any {
         val left = computeValuable(node.left)
         val right = computeValuable(node.right)
         when (val op = node.operator) {
@@ -147,7 +147,7 @@ abstract class ExecutionScope{
         }
     }
 
-    fun computeInvocation(invoke: FunctionInvoke): Any? {
+    suspend fun computeInvocation(invoke: FunctionInvoke): Any? {
         val args = invoke.arguments.map {
             if (it is OfValue) computeValuable(it)
             else throw RuntimeException("Invoked with wrong parameters? Parse error? $invoke")
