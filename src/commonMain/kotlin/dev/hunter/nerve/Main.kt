@@ -70,7 +70,7 @@ fun main() {
     ).tokenize()
     println(tok)
     val nodes = Parser(tok, debug = EnumSet(DebugFlag.STATE)).parse()
-    val it = Interpreter(debug = EnumSet(DebugFlag.STATE, DebugFlag.TIMINGS))
+    val it = Interpreter(debug = EnumSet.all())
     it.interpret(nodes)?.printStackTrace()
     println("Interpreted in ${it.time}")
     // platform.entry()

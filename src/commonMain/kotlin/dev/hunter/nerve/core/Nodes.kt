@@ -1,5 +1,7 @@
 package dev.hunter.nerve.core
 
+import kotlin.time.measureTime
+
 /**
  * A node in the [Abstract Syntax Tree] that forms the syntax of my language.
  *
@@ -60,13 +62,16 @@ data class FunctionDefinition(
         for ((i, arg) in parameters.withIndex()) {
             localScope.setVar(arg, args[i])
         }
-        for (node in body) {
-            if (node is ReturnFunction) {
-                return if (node.variable is Token.Identifier) localScope.getVar(node.variable)
-                else localScope.computeValuable(node.variable)
+        val elap = measureTime{
+            for (node in body) {
+                if (node is ReturnFunction) {
+                    return if (node.variable is Token.Identifier) localScope.getVar(node.variable)
+                    else localScope.computeValuable(node.variable)
+                }
+                localScope.interpret(node)
             }
-            localScope.interpret(node)
         }
+        localScope.interpreter.debug(DebugFlag.TIMINGS) { "Time to compute function '${function.name}(${args.joinToString { "'" + it.toString() + "'" }})' was $elap" }
         return Unit
     }
     private val cachedName = "DeclaredFunction(${function.name}[${parameters.joinToString { it.name }}])"

@@ -98,7 +98,7 @@ class Parser(
     private fun parseBody(function: String): List<Node> {
         buf.get<Separator.LeftBrace>("Expected left brace to start body")
         try {
-            val body = ArrayList<Node>()
+            val body = ArrayList<Node>(5)
             do {
                 val next = buf.peek<Token>()
                 // handle empty function body

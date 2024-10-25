@@ -4,13 +4,17 @@ import kotlin.reflect.KClass
 
 inline fun <reified T: Enum<T>> EnumSet(vararg es: T): EnumSet<T> = EnumSet(T::class, es.asList())
 inline fun <reified T: Enum<T>> EnumSet(): EnumSet<T> = EnumSet(T::class, emptyList())
-
 /**
  * Cannot be iterated (We can't know which ordinal corresponds to an enum value without reflection)
  *
  * @throws UnsupportedOperationException when invoking [iterator]
  */
 class EnumSet<T: Enum<T>>(clas: KClass<T>, elements: Collection<T>): AbstractMutableSet<T>() {
+    companion object{
+        inline fun <reified T: Enum<T>> all(): EnumSet<T> = EnumSet(T::class, T::class.java.enumConstants.asList())
+        inline fun <reified T: Enum<T>> none(): EnumSet<T> = EnumSet(T::class, emptyList())
+    }
+
     internal val type = clas
     internal var flags: Long = 0
 
