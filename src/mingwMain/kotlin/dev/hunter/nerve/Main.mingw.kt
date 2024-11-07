@@ -6,6 +6,6 @@ actual val platform: Platform = object: Platform {
     override val logger: Logger
         get() = TODO("Not yet implemented")
     override val entry: () -> Unit = {
-        throw RuntimeException("HELP")
+        throw InterpretationException("HELP")
     }
 }

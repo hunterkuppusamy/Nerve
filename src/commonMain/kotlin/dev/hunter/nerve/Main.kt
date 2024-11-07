@@ -4,75 +4,50 @@ import dev.hunter.nerve.core.DebugFlag
 import dev.hunter.nerve.core.Interpreter
 import dev.hunter.nerve.core.Parser
 import dev.hunter.nerve.core.Tokenizer
+import kotlin.time.measureTime
 
 fun main() {
-    val tok = Tokenizer(
-        """
-        fun concat(string1, string2){
-            print(
-                '{
-                    string1
-                } + {
-                    string2
-                }'
-            )
+    val tok = Tokenizer("""
+        fun test(arg) {
+            print(arg)
         }
         
-        hello = "hello,"
+        test("yo")
         
-        concat(hello, "world!")
+        var* three = 3
+        var two = 1
+        three = 4
         
-        concat(hello, "asd")
-        
-        fun helloWorld(arg){ 
-            // this is a comment ;)
-            if (arg == 1) {
-                print("arg = 1!")
-                if (true) {
-                    print("this should be logged")
+        fun fortest() {
+            for l in (2 ... 5){
+                print("Iter {l}")
+                if (l == 4) { 
+                    print('returned')
+                    return l 
                 }
-            } 
-            one = 1
-            print('argument = {arg - one} !!') 
+            }
         }
         
-        print("Started time track...")
-        start = system_nanoTime()
+        fortest()
         
-        error = nerve_run("
-            print('
-                Running a script from within a script! 
-                I can even use variables from the calling scope ({
-                    system_nanoTime() - start / 1000 / 1000
-                }ms since start) in the form of a string template!
-                ')
-        ")
+        var msInYear = 1000 * 60 * 60 * 60 * 24 * 7 * 52
+        print("There are {msInYear}ms in a year")
+        print("")
         
-        if (error != null) { 
-            print("Encountered an error running script within script: {error}") 
-        }
-        
-        print(system_currentMillis() / 1000 / 60 / 60 / 24 / 7 / 52) // years since Jan 1, 1970
-        
-        elapsed = system_nanoTime() - start
-        
-        print("Elapsed {elapsed / 1000 / 1000 } ms") // nano -> micro -> milli
-        
-        helloWorld(1)
-        
-        x = 52
-        
-        y = 1 - 5 + x
-        
-        print( y )
+        //V = zeros(4)
+        //
+        //for i = 1:4
+        //  V(i) = (i - 1) / 2
+        //end
         
     """.trimIndent().toCharArray()
     ).tokenize()
     println(tok)
     val nodes = Parser(tok, debug = EnumSet(DebugFlag.STATE)).parse()
     val it = Interpreter(debug = EnumSet.all())
-    it.interpret(nodes)?.printStackTrace()
+    val elapsed = measureTime{ it.interpret(nodes)?.printStackTrace() }
     println("Interpreted in ${it.time}")
+    println("TOTAL (with coroutine overhead): $elapsed")
     // platform.entry()
 }
 

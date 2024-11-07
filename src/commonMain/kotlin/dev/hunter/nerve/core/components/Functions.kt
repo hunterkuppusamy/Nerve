@@ -1,6 +1,9 @@
-package dev.hunter.nerve.core
+package dev.hunter.nerve.core.components
 
 import dev.hunter.nerve.Nerve
+import dev.hunter.nerve.core.ExecutionScope
+import dev.hunter.nerve.core.InterpretationException
+import dev.hunter.nerve.core.LocalExecutionScope
 import org.jetbrains.annotations.ApiStatus
 import kotlin.reflect.KClass
 import kotlin.time.measureTime
@@ -19,11 +22,12 @@ import kotlin.time.measureTime
 abstract class Function{
     suspend fun invoke(scope: ExecutionScope, args: List<Any?>): Any? {
         try{
-            val local = LocalExecutionScope(scope)
-            val ret: Any? = invoke0(local, args)
-            return ret
+            return LocalExecutionScope(scope).use {
+                val ret: Any? = invoke0(it, args)
+                ret
+            }
         }catch (t: Throwable) {
-            throw RuntimeException("Within $this", t)
+            throw InterpretationException("Within $this", t)
         }
     }
     override fun toString(): String = "Function[${this::class.simpleName}(...)]"
@@ -35,51 +39,15 @@ abstract class DelegateFunction(
     val params: Array<out KClass<out Any>>
 ): Function() {
     final override suspend fun invoke0(localScope: ExecutionScope, args: List<Any?>): Any? {
-        val ret: Any?
-        val elapsed = measureTime {
-            for ((i, a) in args.withIndex()) {
-                val p = params.getOrNull(i) ?: throw RuntimeException("Too many arguments, expected only ${params.size}")
-                if (!p.isInstance(a)) throw RuntimeException("Expected argument #$i to be ${params[i].simpleName}, got ${if (a == null) "null" else a::class.simpleName}")
-            }
-            ret = handle(localScope, args)
+        for ((i, a) in args.withIndex()) {
+            val p = params.getOrNull(i) ?: throw InterpretationException("Too many arguments, expected only ${params.size}")
+            if (!p.isInstance(a)) throw InterpretationException("Expected argument #$i to be ${params[i].simpleName}, got ${if (a == null) "null" else a::class.simpleName}")
         }
-        localScope.time += elapsed
-        return ret
+        return handle(localScope, args)
     }
     abstract suspend fun handle(scope: ExecutionScope, args: List<Any?>): Any?
     private val cachedName = "DelegatedFunction[$name(${params.joinToString { it.simpleName ?: "Anonymous Object" }})]"
     final override fun toString(): String = cachedName
-}
-
-object FunctionRegistry {
-    private val _entries = HashMap<String, DelegateFunction>()
-    val entries: Map<String, DelegateFunction> get() = _entries
-
-    fun register(function: DelegateFunction) {
-        val prev = entries[function.name]
-        if (prev is StandardFunction) throw IllegalArgumentException("Cannot override a standard function '$function'")
-        _entries[function.name] = function
-    }
-
-    /**
-     * Optional arguments are passed in as null.
-     * [params] requires all possible expected parameters.
-     *
-     * If the passed in parameters ever exceeds the number of elements in the [params] array, the function call fails
-     */
-    fun register(name: String, params: Array<KClass<out Any>>, f: (ExecutionScope, List<Any?>) -> Any?) {
-        val function = object: DelegateFunction(name, params) {
-            override suspend fun handle(scope: ExecutionScope, args: List<Any?>): Any? = f(scope, args)
-        }
-        register(function)
-    }
-
-    init {
-        register(StandardFunction.Print)
-        register(StandardFunction.SystemNanoTime)
-        register(StandardFunction.SystemCurrentMillis)
-        register(StandardFunction.RunNerve)
-    }
 }
 
 sealed class StandardFunction(
@@ -91,7 +59,7 @@ sealed class StandardFunction(
     data object Print: StandardFunction("print", Any::class, exec =
     { scope, args ->
         val str = args.getOrNull(0)
-        val ret = if (str is OfValue) scope.computeValuable(str).toString() else str?.toString() ?: ""
+        val ret = if (str is OfValue) str.interpret(scope).toString() else str?.toString() ?: ""
         scope.interpreter.logMethod(ret)
     })
     data object SystemCurrentMillis: StandardFunction("system_currentMillis", exec =
@@ -104,7 +72,7 @@ sealed class StandardFunction(
     })
     data object RunNerve: StandardFunction("nerve_run", String::class, exec =
     {scope, args ->
-        val string = args.getOrNull(0) ?: throw RuntimeException("Missing parameter 1")
+        val string = args.getOrNull(0) ?: throw InterpretationException("Missing parameter 1")
         Nerve.run((string as String).toCharArray())
     })
 }

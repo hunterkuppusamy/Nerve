@@ -1,11 +1,15 @@
-package dev.hunter.nerve.core
+package dev.hunter.nerve.core.components
+
+import dev.hunter.nerve.core.ExecutionScope
+import dev.hunter.nerve.core.InterpretationException
 
 sealed class Token {
     abstract val line: Int
-    class Identifier(override val line: Int, val name: String): Token(), OfValue{
+    class Identifier(override val line: Int, val name: String): Token(), OfValue {
+        override suspend fun interpret(scope: ExecutionScope): Any? = scope.getValueOf(this)
         override fun toString(): String = "|$name|"
     }
-    class StringTemplate(override val line: Int, val tokens: List<Any> /* terrible move */): Token(), OfValue {// not a data class because of the array
+    class StringTemplate(override val line: Int, val tokens: List<Any> /* terrible move */): Token() {// not a data class because of the array
         private val _cachedString = ">$tokens<"
         override fun toString(): String = _cachedString
     }
@@ -24,7 +28,7 @@ sealed class Constant: Token(), OfValue {
     class BooleanLiteral(override val line: Int, override val value: Boolean): Constant()
 
     abstract val value: Any
-
+    override suspend fun interpret(scope: ExecutionScope): Any? = value
     override fun toString(): String = "'$value'"
 }
 
@@ -52,6 +56,7 @@ sealed class Operator(private val str: String): Token() {
     class IsNotEqual(override val line: Int): Operator("!=")
     class IsGreaterThan(override val line: Int): Operator(">")
     class IsLessThan(override val line: Int): Operator("<")
+    class Range(override val line: Int): Operator("...")
 
     override fun toString(): String = "[$str]"
 }
@@ -62,10 +67,16 @@ sealed class Keyword: Token(){
     class Do(override val line: Int): Keyword()
     class Return(override val line: Int): Keyword()
     class Break(override val line: Int): Keyword()
+    class For(override val line: Int): Keyword()
     class Continue(override val line: Int): Keyword()
     class Fun(override val line: Int): Keyword()
+    class Var(override val line: Int): Keyword()
+    class MutVar(override val line: Int): Keyword()
     class Else(override val line: Int): Keyword()
-    class Null(override val line: Int): Keyword(), OfValue
+    // class In(override val line: Int): Keyword()
+    class Null(override val line: Int): Keyword(), OfValue{
+        override suspend fun interpret(scope: ExecutionScope): Any? = null
+    }
 
     private val _cachedName = "\$${this::class.simpleName!!.uppercase()}\$"
 
@@ -76,8 +87,12 @@ sealed class Keyword: Token(){
             return when (name.lowercase()) {
                 "if" -> If(line)
                 "else" -> Else(line)
+                "var" -> Var(line)
+                "var*" -> MutVar(line) // not really tokenized through this function
+                "for" -> For(line)
                 "while" -> While(line)
                 "do" -> Do(line)
+                // "in" -> In(line)
                 "return" -> Return(line)
                 "break" -> Break(line)
                 "continue" -> Continue(line)

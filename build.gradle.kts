@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "dev.hunter"
-version = "0.0.17"
+version = "0.1.0"
 
 kotlin {
     jvm {

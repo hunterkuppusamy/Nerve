@@ -2,6 +2,7 @@ package dev.hunter.nerve.core
 
 import dev.hunter.nerve.CanDebug
 import dev.hunter.nerve.EnumSet
+import dev.hunter.nerve.core.components.*
 import dev.hunter.nerve.platform
 import org.jetbrains.annotations.ApiStatus.NonExtendable
 import kotlin.collections.ArrayList
@@ -9,7 +10,7 @@ import kotlin.collections.ArrayList
 @NonExtendable
 open class Tokenizer(
     arr: CharArray,
-    val debug: EnumSet<DebugFlag> = EnumSet()
+    val debug: EnumSet<DebugFlag> = EnumSet<DebugFlag>()
 ): CanDebug {
     private val literalBuffer = StringBuilder()
     private val tokens = ArrayList<Token>()
@@ -40,11 +41,11 @@ open class Tokenizer(
     fun tokenize(): List<Token> {
         while(buf.hasRemaining()) {
             val c = buf.peek()
-            if (c == '\n' || c == '\r') dropToNextLine()
-            if (c.isWhitespace()) dropWhitespace()
+            if (c.isNewLineChar) dropToNextLine()
+            else if (c.isWhitespace()) dropWhitespace()
             else if (c.isLetter()) lexIdentifierOrKeyword()
-            else if (c == '\'' || c == '\"') lexString()
             else if (c.isDigit()) lexNumber()
+            else if (c == '\'' || c == '\"') lexString()
             else lexSpecial()
         }
         return tokens
@@ -84,6 +85,14 @@ open class Tokenizer(
                     tokens.add(Operator.IsEqual(line))
                 } else tokens.add(Operator.Assign(line))
             }
+            '.' -> {
+                val one = buf.peek()
+                val two = buf.peek(1)
+                if (one == '.' && two == '.'){
+                    buf.consume(); buf.consume()
+                    tokens.add(Operator.Range(line))
+                }
+            }
             else -> throwTokenException("Unhandled special character")
         }
     }
@@ -109,6 +118,7 @@ open class Tokenizer(
         )
         tokens.add(token)
     }
+
 
     private val templateBuffer = ArrayList<Any>(5)
 
@@ -155,17 +165,11 @@ open class Tokenizer(
             val c = buf.consume()
             if (c == '\n' || c == '\r') break
         }
-        line++
     }
 
     private fun dropToNextLine(){
+        buf.consume()
         line++
-        while(buf.hasRemaining()){
-            val c = buf.peek()
-            if (c != '\n' && c != '\r') break
-            else buf.consume()
-            line++
-        }
     }
 
     private fun lexIdentifierOrKeyword() {
@@ -187,7 +191,11 @@ open class Tokenizer(
             tokens.add(Constant.BooleanLiteral(line, true))
             return
         }
-        val token = Keyword.byName(ident, line) ?: Token.Identifier(line, ident)
+        var token = Keyword.byName(ident, line) ?: Token.Identifier(line, ident)
+        if (token is Keyword.Var && buf.peek() == '*'){
+            buf.consume()
+            token = Keyword.MutVar(line)
+        }
         tokens.add(token)
     }
 
@@ -223,6 +231,10 @@ class StringTemplateTokenizer(
 val Char.isValidIdentChar: Boolean get() {
     return if (this.isLetterOrDigit()) true else if (this == '_' || this == '-') true else false
 }
+
+val Char.isNewLineChar: Boolean get() = if (
+        this == '\u000A' || this == '\u000D' || this == '\u0085' || this == '\u2424'
+    ) true else false
 
 class TokenizerException(msg: String?) : Exception(msg)
 
