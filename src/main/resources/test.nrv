@@ -1,0 +1,21 @@
+var* Integer mut1 = 1
+var* String mut2 = "2"
+var Double three = 3
+var Integer sixteen = 16
+
+fun parameters(Integer int, String string) > String {
+    return "{int + 1} and {string}"
+}
+
+fun forloopt(Integer i) > Integer {
+    var* Integer count = 0
+    count = 1
+    for Integer ii in (0 ... i){
+        print("For loop test iteration {ii}")
+        count = count + 1
+    }
+    return count
+}
+
+var Integer f = forloopt(sixteen)
+var Integer x = 1 + 2

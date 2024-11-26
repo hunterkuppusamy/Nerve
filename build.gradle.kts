@@ -1,48 +1,24 @@
-
-
 plugins {
-    alias(libs.plugins.kotlinMultiplatform)
     `maven-publish`
+    kotlin("jvm") version "2.0.0"
+    id("io.github.goooler.shadow") version "8.1.2"
 }
 
 group = "dev.hunter"
-version = "0.1.0"
+version = "0.1.1"
+
+repositories {
+    mavenCentral()
+    google()
+}
+
+dependencies {
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.asm)
+}
 
 kotlin {
-    jvm {
-        withSourcesJar(publish = false)
-    }
-    // no reason for these really...
-    // linuxX64()
-    // mingwX64()
-
-    repositories {
-        mavenCentral()
-        google()
-    }
-
-    sourceSets {
-        commonMain {
-            dependencies {
-                implementation(libs.kotlinx.coroutines.core)
-            }
-        }
-
-        jvmMain {
-            dependencies {
-            }
-        }
-
-        linuxMain {
-            dependencies {
-            }
-        }
-
-        mingwMain {
-            dependencies {
-            }
-        }
-    }
+    jvmToolchain(21)
 }
 
 publishing {
@@ -78,7 +54,8 @@ publishing {
 
             println("artifact = $group:$artifactId:$version")
 
-            from(getComponents()["kotlin"]) // the property delegate for the function is actually overloaded and idk how to not do that!
+            from(components["kotlin"])
+            // from(getComponents()["kotlin"]) // the property delegate for the function is actually overloaded and idk how to not do that!
         }
     }
 }
