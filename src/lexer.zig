@@ -1,13 +1,15 @@
 const std = @import("std");
+const root = @import("root.zig");
 const testing = std.testing;
+const Diagnostics = @import("root.zig").Diagnostics;
 const expect = testing.expect;
 
 pub const Lexer = struct {
     const Self = @This();
 
     // Parameters
-    source: []const u8,
     allocator: std.mem.Allocator,
+    source: root.STRING,
 
     // State
     i: usize = 0,
@@ -18,8 +20,8 @@ pub const Lexer = struct {
     // Testing
     initial_token_size: usize = 16,
 
-    pub fn tokenize(self: *Self) ![]Token {
-        var arr = try self.allocator.alloc(Token, self.initial_token_size);
+    pub fn tokenize(self: *Self) !std.ArrayList(Token) {
+        var arr = try std.ArrayListAligned(Token, null).initCapacity(self.allocator, self.initial_token_size);
         var i: usize = 0;
         self.i = 0;
         self.position_col = 0;
@@ -29,20 +31,12 @@ pub const Lexer = struct {
         // if there are extra characters some lex fn will throw.
         while (self.i < self.source.len) {
             const token = try self.lex();
-            if (i >= arr.len) arr = try self.resizeTokens(arr);
-            arr[i] = token;
+            try arr.append(self.allocator, token);
             std.debug.print("tokenize: Lexed kind {s}\n", .{@tagName(token.kind)});
             i += 1;
         }
 
-        return arr[0..i];
-    }
-
-    fn resizeTokens(self: *Self, arr: []Token) ![]Token {
-        const ret = try self.allocator.alloc(Token, arr.len * 2);
-        @memmove(ret, arr);
-        self.allocator.free(arr);
-        return ret;
+        return arr;
     }
 
     fn lex(self: *Self) !Token {
@@ -98,16 +92,14 @@ pub const Lexer = struct {
 
         const str = self.source[start_i..self.i];
 
-        const kind = checkIdentIsKeyword(str) orelse cb: {
-            break :cb TokenKind.identifier;
-        };
-        const ret: Token = .{ .data = .{ .source_string = str }, .kind = kind };
-        return ret;
+        const keyword = checkIdentIsKeyword(str);
+        if (keyword == null) return .{ .kind = .identifier, .data = .{ .source_string = str } }
+        else return .{ .kind = keyword.?, .data = .none };
     }
 
     /// Return the keyword if true
-    fn checkIdentIsKeyword(buf: []const u8) ?TokenKind {
-        var kinds = [_]?TokenKind{
+    fn checkIdentIsKeyword(buf: root.STRING) ?TokenKind {
+        const kinds = [_]?TokenKind{
             .keyword_pub,
             .keyword_const,
             .keyword_struct,
@@ -127,37 +119,12 @@ pub const Lexer = struct {
 
             .keyword_return,
         };
-        var kindStrs = [_]?[]const u8{undefined} ** kinds.len;
         for (kinds, 0..) |key, i| {
-            kindStrs[i] = @tagName(key.?)[8..];
+            const kind_str = @tagName(key.?)[8..];
+            if (std.mem.eql(u8, kind_str, buf)) return kinds[i];
         }
 
-        var lastSeenKind: ?TokenKind = null;
-        var nulls: u8 = 0;
-        // is the best approach to check each character like this or just
-        // linearly traverse the list of keywords...
-        for (buf, 0..) |c, i| {
-            for (kindStrs, 0..) |nstr, kindNdx| {
-                const kindStr = nstr orelse {
-                    nulls += 1;
-                    continue;
-                };
-                if (c != 0 and (i >= kindStr.len or c != kindStr[i])) {
-                    kindStrs[kindNdx] = null;
-                    kinds[kindNdx] = null;
-                    continue;
-                }
-                lastSeenKind = kinds[kindNdx];
-            }
-
-            if (kinds.len - nulls == 1) {
-                return lastSeenKind;
-            } else if (kinds.len - nulls == 0) {
-                return null;
-            }
-        }
-
-        return lastSeenKind;
+        return null;
     }
 
     fn lexLiteralNumber(self: *Self) !Token {
@@ -165,8 +132,8 @@ pub const Lexer = struct {
         var decimals: u4 = 0;
         const start_i = self.i;
 
-        while (isNumber(c)) {
-            if (c == '.') decimals += 1;
+        while (isNumber(c) or c == '.') {
+            if (c == '.') decimals +|= 1;
             c = try self.nextChar();
         }
 
@@ -184,13 +151,13 @@ pub const Lexer = struct {
             };
             return error.InvalidCharacter;
         } else if (decimals == 1) {
-            const f = try std.fmt.parseFloat(f32, str);
+            const f = try std.fmt.parseFloat(root.FLOAT, str);
             return .{ .data = .{
                 .float = f,
             }, .kind = TokenKind.literal_float };
         } else {
-            const n = try std.fmt.parseInt(i32, str, 10);
-            return .{ .data = .{ .signed_int = n }, .kind = TokenKind.literal_integer };
+            const n = try std.fmt.parseInt(root.INTEGER, str, 10);
+            return .{ .data = .{ .integer = n }, .kind = TokenKind.literal_integer };
         }
     }
 
@@ -198,6 +165,7 @@ pub const Lexer = struct {
         var c = self.source[self.i]; // opening quote
         self.i += 1;
         c = self.source[self.i];
+        // mutable HEAP_STRING
         var buf: *[256:0]u8 = @ptrCast((try self.allocator.alloc(u8, 256)).ptr);
         var i: u8 = 0;
         var escaped = false;
@@ -232,7 +200,7 @@ pub const Lexer = struct {
         i += 1;
 
         // doesnt include the null terminator; there is no need
-        const str: []const u8 = buf[0 .. i - 1];
+        const str: root.STRING = buf[0 .. i - 1];
 
         return .{
             .data = .{ .heap_string = .{
@@ -261,13 +229,18 @@ pub const Lexer = struct {
             '[' => .open_bracket,
             ']' => .close_bracket,
 
+            '+' => .operator_add,
+            '*' => .operator_mul,
+            '/' => .operator_div,
+
             '.' => .period,
             ',' => .comma,
+            ':' => .colon,
             ';' => .semicolon,
             '=' => .equals,
             '-' => arrow: {
                 const ch = try self.nextChar();
-                if (ch == '>') break :arrow .right_arrow else return error.UnknownSpecialCharacter;
+                if (ch == '>') break :arrow .right_arrow else break :arrow .operator_sub;
             },
             else => {
                 self.diagnostics.err = .{
@@ -304,27 +277,14 @@ pub const Lexer = struct {
     fn isNewLineChar(char: u8) bool {
         return char == '\n' or char == '\r';
     }
-
-    pub const Diagnostics = struct {
-        err: ?struct {
-            error_type: anyerror,
-            error_line: usize = undefined,
-            error_column: usize = undefined,
-            error_message: ?[*:0]const u8 = null,
-            message_is_allocated: bool = false,
-            data: ?union(enum) {
-                token_data: TokenData,
-                i: i32
-            } = null,
-        } = null,
-    };
 };
 
 test "lexing identifier" {
     const name = "identifier";
-    var lexer = Lexer{ .allocator = std.testing.allocator, .source = name ++ "()" };
+    var lexer = Lexer{ .allocator = std.testing.allocator, .source = name ++ ";" };
     const token = try lexer.lex();
-    try expect(token.kind != TokenKind.identifier);
+    try expect(token.kind == TokenKind.identifier);
+    try expect(token.data == TokenData.source_string);
     try expect(std.mem.eql(u8, token.data.source_string, name));
 }
 
@@ -339,10 +299,18 @@ test "lexing string" {
 
 test "lexing integer" {
     const int = "214";
-    var lexer = Lexer{ .allocator = std.testing.allocator, .source = int ++ "()" };
+    var lexer = Lexer{ .allocator = std.testing.allocator, .source = int ++ ";" };
     const token = try lexer.lex();
     try expect(token.kind == TokenKind.literal_integer);
-    try expect(token.data.signed_int == try std.fmt.parseInt(i32, int, 10));
+    try expect(token.data.integer == try std.fmt.parseInt(root.INTEGER, int, 10));
+}
+
+test "lexing float" {
+    const pi = "3.141592";
+    var lexer = Lexer{ .allocator = std.testing.allocator, .source = pi ++ ";" };
+    const token = try lexer.lex();
+    try expect(token.kind == TokenKind.literal_float);
+    try expect(token.data.float == try std.fmt.parseFloat(root.FLOAT, pi));
 }
 
 test "lexing function body" {
@@ -353,15 +321,19 @@ test "lexing function body" {
         \\    return thing.mutate();
         \\}
     };
-    const tokens = try lexer.tokenize();
-    defer lexer.allocator.free(tokens);
+    var tokenList = try lexer.tokenize();
+    defer tokenList.deinit(lexer.allocator);
+    const tokens = tokenList.items;
     var kinds = [_]TokenKind{undefined} ** 19;
+
 
     for (tokens, 0..) |token, i| {
         kinds[i] = token.kind;
     }
 
-    const expected = [_]TokenKind{ .keyword_pub, .keyword_fn, .identifier, .open_paren, .identifier, .semicolon, .identifier, .close_paren, .right_arrow, .identifier, .open_brace, .keyword_return, .identifier, .period, .identifier, .open_paren, .close_paren, .semicolon, .close_brace };
+    const expected = [_]TokenKind{
+        .keyword_pub, .keyword_fn, .identifier, .open_paren, .identifier, .colon, .identifier, .close_paren, .right_arrow, .identifier, .open_brace, .keyword_return, .identifier, .period, .identifier, .open_paren, .close_paren, .semicolon, .close_brace };
+    // check token data here too?
     try expect(std.mem.eql(TokenKind, &kinds, &expected));
 }
 
@@ -376,16 +348,16 @@ pub const TokenData = union(enum) {
     /// source slices.
     heap_string: struct {
         /// A slice only containing the characters of the string
-        slice: []const u8,
+        slice: root.STRING,
         /// The raw allocated array. Should be freed when finished.
-        raw: *const [256:0]u8,
+        raw: root.HEAP_STRING,
     },
     /// A string slice of the source
-    source_string: []const u8,
-    char: u8,
-    signed_int: i32,
-    unsigned_int: u32,
-    float: f32,
+    source_string: root.STRING,
+    char: root.CHAR,
+    integer: root.INTEGER,
+    u_integer: root.U_INTEGER,
+    float: root.FLOAT,
     none,
 };
 
@@ -404,8 +376,9 @@ pub const TokenKind = enum(u8) {
 
     period,
     comma,
+    colon,
     semicolon,
-    equals,
+    equals, // assignment and equality, depending on number of occurrences
 
     right_arrow,
 
@@ -432,4 +405,9 @@ pub const TokenKind = enum(u8) {
     keyword_continue,
 
     keyword_return,
+
+    operator_add,
+    operator_sub,
+    operator_mul,
+    operator_div,
 };
