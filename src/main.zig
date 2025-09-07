@@ -9,8 +9,11 @@ pub fn main() !void {
     std.debug.print("The type of string '{s}' is '{s}'", .{ string, @typeName(@TypeOf(string)) });
     std.debug.print("Starting program.\n", .{});
     try Nerve.compile(
-        \\pub fn helloWorld(thing: Thing) -> Thing {
-        \\  return happiness.welp();
+        \\pub fn start(y: int32)-> int32 {
+        \\  var const a = 1 / y;
+        \\  fn h(x: int32) -> int32 = x + 1;
+        \\  var b = h(a);
+        \\  return h(b) * 2;
         \\}
     );
 }

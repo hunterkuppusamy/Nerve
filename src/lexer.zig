@@ -86,14 +86,16 @@ pub const Lexer = struct {
     fn lexKeywordOrIdentifier(self: *Self) !Token {
         var c = self.source[self.i]; // char from lex()
         const start_i = self.i;
-        while (isLetter(c)) {
+        while (isLetter(c) or isNumber(c)) {
             c = self.nextChar() catch break;
         }
 
         const str = self.source[start_i..self.i];
 
         const keyword = checkIdentIsKeyword(str);
-        if (keyword == null) return .{ .kind = .identifier, .data = .{ .source_string = str } }
+        if (keyword == null) return .{ .kind = .identifier, .data = .{ .string = .{
+            .slice = str,
+        } } }
         else return .{ .kind = keyword.?, .data = .none };
     }
 
@@ -203,7 +205,7 @@ pub const Lexer = struct {
         const str: root.STRING = buf[0 .. i - 1];
 
         return .{
-            .data = .{ .heap_string = .{
+            .data = .{ .string = .{
                 .slice = str,
                 .raw = buf,
             } },
@@ -239,8 +241,12 @@ pub const Lexer = struct {
             ';' => .semicolon,
             '=' => .equals,
             '-' => arrow: {
-                const ch = try self.nextChar();
-                if (ch == '>') break :arrow .right_arrow else break :arrow .operator_sub;
+                const ch = self.source[self.i + 1];
+                if (ch == '>') {
+                    _ = try self.nextChar();
+                    break :arrow .right_arrow;
+                }
+                else break :arrow .operator_sub;
             },
             else => {
                 self.diagnostics.err = .{
@@ -284,17 +290,17 @@ test "lexing identifier" {
     var lexer = Lexer{ .allocator = std.testing.allocator, .source = name ++ ";" };
     const token = try lexer.lex();
     try expect(token.kind == TokenKind.identifier);
-    try expect(token.data == TokenData.source_string);
-    try expect(std.mem.eql(u8, token.data.source_string, name));
+    try expect(token.data == TokenData.string);
+    try expect(std.mem.eql(u8, token.data.string, name));
 }
 
 test "lexing string" {
     const str = "hello";
     var lexer = Lexer{ .allocator = std.testing.allocator, .source = "\"" ++ str ++ "\"" };
     const token = try lexer.lex();
-    defer lexer.allocator.free(token.data.heap_string.raw);
+    defer lexer.allocator.free(token.data.string.raw);
     try expect(token.kind == TokenKind.literal_string);
-    try expect(std.mem.eql(u8, token.data.heap_string.slice, str));
+    try expect(std.mem.eql(u8, token.data.string.slice, str));
 }
 
 test "lexing integer" {
@@ -346,14 +352,12 @@ pub const TokenData = union(enum) {
     /// An allocated string slice, typically for literal_strings.
     /// This is because escape sequences lead to more than just
     /// source slices.
-    heap_string: struct {
+    string: struct {
         /// A slice only containing the characters of the string
         slice: root.STRING,
         /// The raw allocated array. Should be freed when finished.
-        raw: root.HEAP_STRING,
+        raw: ?root.HEAP_STRING = null,
     },
-    /// A string slice of the source
-    source_string: root.STRING,
     char: root.CHAR,
     integer: root.INTEGER,
     u_integer: root.U_INTEGER,

@@ -1,14 +1,15 @@
 const std = @import("std");
 const lexer = @import("lexer.zig");
 const parser = @import("parser.zig");
+const r = @import("root");
 
 pub const INTEGER = i32;
 pub const U_INTEGER = u32;
 pub const FLOAT = f32;
 pub const CHAR = u8;
 
-pub const std_options: std.Options = .{
-  .fmt_max_depth = 100
+pub const std_options = std.Options {
+  .fmt_max_depth = 1000
 };
 
 // Im not convinced I want these for the string types...
@@ -66,40 +67,96 @@ pub fn compile(source: STRING) !void {
     std.debug.print("Parsed tokens.\n", .{});
     printNode(node);
 
-    freeNode(node, p.allocator);
 }
 
-fn freeNode(node: *parser.Node, alloc: std.mem.Allocator) void {
+fn printNode(node: *const parser.Node) void {
     switch (node.value) {
         .binary_op => {
-            alloc.destroy(node.value.binary_op.lhs);
-            alloc.destroy(node.value.binary_op.rhs);
-        },
-        else => {}
-    }
-
-    alloc.destroy(node);
-}
-
-fn printNode(node: *parser.Node) void {
-    switch (node.value) {
-        .binary_op => {
-            std.debug.print("(", .{});
             printNode(node.value.binary_op.lhs);
-            std.debug.print(" {s} ", .{ @tagName(node.value.binary_op.op) });
+            const o: u8 = switch (node.value.binary_op.op) {
+                .add => '+',
+                .sub => '-',
+                .div => '/',
+                .mul => '*'
+            };
+            std.debug.print(" {c} ", .{ o });
             printNode(node.value.binary_op.rhs);
-            std.debug.print(")", .{});
         },
         .unary_op => {
-            std.debug.print("(", .{});
-            std.debug.print("{s} ", .{ @tagName(node.value.unary_op.op) });
+            const o: u8 = switch (node.value.unary_op.op) {
+                .negate => '-',
+            };
+            std.debug.print("{c}", .{ o });
             printNode(node.value.unary_op.rhs);
+        },
+        .make_var => {
+            const make = node.value.make_var;
+            std.debug.print("var ", .{});
+            if (make.mods.constant) {
+                std.debug.print("const ", .{});
+            }
+            std.debug.print("{s}", .{ make.name.data.string.slice });
+            if (make.typ != null) {
+                std.debug.print(": ", .{});
+                printNode(make.typ.?);
+            } else {
+                std.debug.print(": ?", .{});
+            }
+            std.debug.print(" = ", .{});
+            printNode(make.value);
+        },
+        .function_decl => {
+            const fun = node.value.function_decl;
+            if (fun.mods.public) {
+                std.debug.print("pub ", .{});
+            }
+            if (fun.mods.constant) {
+                std.debug.print("const ", .{});
+            }
+            std.debug.print("fn {s}(", .{fun.name.data.string.slice});
+            for (fun.params) |p| {
+                std.debug.print("{s}: ", .{p.value.function_param.name.data.string.slice});
+                printNode(p.value.function_param.type);
+            }
+            std.debug.print(") -> ", .{});
+            printNode(fun.return_type);
+            if (fun.body.value != parser.NodeValue.body) {
+                std.debug.print(" = ", .{});
+                printNode(fun.body);
+                return;
+            }
+            std.debug.print(" {{", .{});
+            for (fun.body.value.body.nodes) |line| {
+                std.debug.print("\n", .{});
+                printNode(&line);
+                std.debug.print(";", .{});
+            }
+            std.debug.print("\n}}\n", .{});
+        },
+        .return_expr => {
+            std.debug.print("return ", .{});
+            printNode(node.value.return_expr);
+        },
+        .function_invoke => {
+            const f = node.value.function_invoke;
+            printNode(f.namespace);
+            std.debug.print("(", .{});
+            for (f.args) |a| {
+                printNode(&a);
+            }
             std.debug.print(")", .{});
+        },
+        .namespace => {
+            for (node.value.namespace.tokens, 0..) |tok, i| {
+                if (i + 1 >= node.value.namespace.tokens.len) {
+                    std.debug.print("{s}", .{tok.data.string.slice});
+                } else std.debug.print("{s}.", .{tok.data.string.slice});
+            }
         },
         .integer => {
             std.debug.print("{}", .{ node.value.integer });
         },
-        else => std.debug.print("{any} ", .{ node.value })
+        else => std.debug.print("|{any}|", .{ node.value })
     }
 }
 
@@ -108,16 +165,8 @@ fn printTokens(tokens: std.ArrayList(lexer.Token)) void {
     for (tokens.items) |token| {
         std.debug.print("{s}", .{ @tagName(token.kind) });
         switch (token.data) {
-            .heap_string => {
-                const str = token.data.heap_string.slice;
-                std.debug.print("={s} (", .{ str });
-                for (str) |c| {
-                    std.debug.print("{} ", .{ c });
-                }
-                std.debug.print(")", .{});
-            },
-            .source_string => {
-                const str = token.data.source_string;
+            .string => {
+                const str = token.data.string.slice;
                 std.debug.print("={s} (", .{ str });
                 for (str) |c| {
                     std.debug.print("{} ", .{ c });
