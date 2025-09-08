@@ -16,9 +16,14 @@ pub const Lexer = struct {
     position_row: usize = 1,
     position_col: usize = 1,
     diagnostics: Diagnostics = .{},
+    is_commented: bool = false,
 
     // Testing
     initial_token_size: usize = 16,
+
+    const Error = error {
+        IsComment,
+    };
 
     pub fn tokenize(self: *Self) !std.ArrayList(Token) {
         var arr = try std.ArrayListAligned(Token, null).initCapacity(self.allocator, self.initial_token_size);
@@ -30,7 +35,7 @@ pub const Lexer = struct {
         // While characters remain in the source
         // if there are extra characters some lex fn will throw.
         while (self.i < self.source.len) {
-            const token = try self.lex();
+            const token = try self.lex() orelse continue;
             try arr.append(self.allocator, token);
             std.debug.print("tokenize: Lexed kind {s}\n", .{@tagName(token.kind)});
             i += 1;
@@ -39,23 +44,32 @@ pub const Lexer = struct {
         return arr;
     }
 
-    fn lex(self: *Self) !Token {
+    fn lex(self: *Self) !?Token {
         const c: u8 = self.source[self.i];
-        // TODO: Seek until no whitespace and then lex; avoid recursion when the next character is guaranteed whitespace.
-        if (isNewLineChar(c)) {
-            self.position_row += 1;
-            self.i += 1;
-            return try self.lex();
-        } else if (isWhitespace(c)) {
+
+        if (c == ' ') {
             self.position_col += 1;
-            self.i += 1;
-            return try self.lex();
+            try self.increment();
+            return null;
+        } else if (std.ascii.isWhitespace(c)) {
+            // Is new line.
+            self.position_row += 1;
+            try self.increment();
+            self.is_commented = false;
+            return null;
         }
 
-        std.debug.print("lex: Lexing {c} (0x{x})...\n", .{ c, c });
-        return if (isLetter(c))
+        // Comment handling
+        if (self.is_commented or (c == '/' and self.source[self.i + 1] == '/')) {
+            self.is_commented = true;
+            try self.increment();
+            return null;
+        }
+
+        std.debug.print("lex: Lexing {c} ({})...\n", .{ c, c });
+        return try if (std.ascii.isAlphabetic(c))
             self.lexKeywordOrIdentifier()
-        else if (isNumber(c))
+        else if (std.ascii.isDigit(c))
             self.lexLiteralNumber()
         else if (c == '"')
             self.lexLiteralString()
@@ -66,11 +80,11 @@ pub const Lexer = struct {
     }
 
     fn nextChar(self: *Self) !u8 {
-        try self.incrementSourceIndex();
+        try self.increment();
         return self.source[self.i];
     }
 
-    fn incrementSourceIndex(self: *Self) !void {
+    fn increment(self: *Self) !void {
         self.i += 1;
         if (self.i >= self.source.len) {
             self.diagnostics.err = .{
@@ -86,44 +100,50 @@ pub const Lexer = struct {
     fn lexKeywordOrIdentifier(self: *Self) !Token {
         var c = self.source[self.i]; // char from lex()
         const start_i = self.i;
-        while (isLetter(c) or isNumber(c)) {
+        while (std.ascii.isAlphanumeric(c)) {
             c = self.nextChar() catch break;
         }
 
         const str = self.source[start_i..self.i];
 
         const keyword = checkIdentIsKeyword(str);
-        if (keyword == null) return .{ .kind = .identifier, .data = .{ .string = .{
-            .slice = str,
-        } } }
-        else return .{ .kind = keyword.?, .data = .none };
+        if (keyword == null) return .{
+            .kind = .identifier,
+            .data = .{ .string = .{
+                .slice = str,
+            }},
+            .source_data = self.currentSourceData()
+        }
+        else return .{ .kind = keyword.?, .data = .none, .source_data = self.currentSourceData() };
+    }
+
+    fn currentSourceData(self: *Self) SourceData {
+        return .{
+            .column = self.position_col,
+            .line = self.position_row,
+            .index = self.i,
+        };
     }
 
     /// Return the keyword if true
     fn checkIdentIsKeyword(buf: root.STRING) ?TokenKind {
-        const kinds = [_]?TokenKind{
-            .keyword_pub,
-            .keyword_const,
-            .keyword_struct,
-            .keyword_enum,
-
-            .keyword_fn,
-            .keyword_var,
-
-            .keyword_if,
-            .keyword_else,
-            .keyword_elseif,
-
-            .keyword_while,
-            .keyword_for,
-            .keyword_break,
-            .keyword_continue,
-
-            .keyword_return,
+        const keywords = comptime select: {
+            var keyword_slice = [_]TokenKind{ undefined } ** @typeInfo(TokenKind).@"enum".fields.len;
+            var i: usize = 0;
+            const keyword_prefix = "keyword_";
+            for (@typeInfo(TokenKind).@"enum".fields) |f| {
+                if (f.name.len >= keyword_prefix.len and std.mem.eql(u8, keyword_prefix, f.name[0..keyword_prefix.len])) {
+                    keyword_slice[i] = @enumFromInt(f.value);
+                    i += 1;
+                }
+            }
+            var only_keywords = [_]TokenKind{undefined} ** i;
+            @memmove(&only_keywords, keyword_slice[0..i]);
+            break :select only_keywords;
         };
-        for (kinds, 0..) |key, i| {
-            const kind_str = @tagName(key.?)[8..];
-            if (std.mem.eql(u8, kind_str, buf)) return kinds[i];
+        for (keywords) |keyword| {
+            const keyword_name = @tagName(keyword)[8..];
+            if (std.mem.eql(u8, keyword_name, buf)) return keyword;
         }
 
         return null;
@@ -134,7 +154,7 @@ pub const Lexer = struct {
         var decimals: u4 = 0;
         const start_i = self.i;
 
-        while (isNumber(c) or c == '.') {
+        while (std.ascii.isDigit(c) or c == '.') {
             if (c == '.') decimals +|= 1;
             c = try self.nextChar();
         }
@@ -156,10 +176,10 @@ pub const Lexer = struct {
             const f = try std.fmt.parseFloat(root.FLOAT, str);
             return .{ .data = .{
                 .float = f,
-            }, .kind = TokenKind.literal_float };
+            }, .kind = TokenKind.literal_float, .source_data = self.currentSourceData() };
         } else {
             const n = try std.fmt.parseInt(root.INTEGER, str, 10);
-            return .{ .data = .{ .integer = n }, .kind = TokenKind.literal_integer };
+            return .{ .data = .{ .integer = n }, .kind = TokenKind.literal_integer, .source_data = self.currentSourceData() };
         }
     }
 
@@ -210,6 +230,7 @@ pub const Lexer = struct {
                 .raw = buf,
             } },
             .kind = TokenKind.literal_string,
+            .source_data = self.currentSourceData()
         };
     }
 
@@ -218,7 +239,7 @@ pub const Lexer = struct {
         self.i += 1;
         c = self.source[self.i];
 
-        return .{ .data = .{ .char = c }, .kind = TokenKind.literal_integer };
+        return .{ .data = .{ .char = c }, .kind = TokenKind.literal_integer, .source_data = self.currentSourceData() };
     }
 
     fn lexSpecial(self: *Self) !Token {
@@ -240,6 +261,8 @@ pub const Lexer = struct {
             ':' => .colon,
             ';' => .semicolon,
             '=' => .equals,
+            '<' => .less_than,
+            '>' => .greater_than,
             '-' => arrow: {
                 const ch = self.source[self.i + 1];
                 if (ch == '>') {
@@ -255,6 +278,7 @@ pub const Lexer = struct {
                     .error_column = self.position_col,
                     .error_message = "Reached unknown special character"
                 };
+                std.debug.print("Unknown special char '{c}'\n", .{ c });
                 return error.UnknownSpecialCharacter;
             },
         };
@@ -264,24 +288,8 @@ pub const Lexer = struct {
         return .{
             .data = .none,
             .kind = kind,
+            .source_data = self.currentSourceData()
         };
-    }
-
-    fn isWhitespace(char: u8) bool {
-        return char == ' ';
-    }
-
-    fn isNumber(char: u8) bool {
-        return 0x30 <= char and char <= 0x39;
-    }
-
-    fn isLetter(char: u8) bool {
-        return (char >= 0x41 and char <= 0x5A) // uppercase
-        or (char >= 0x61 and char <= 0x7A); // lowercase
-    }
-
-    fn isNewLineChar(char: u8) bool {
-        return char == '\n' or char == '\r';
     }
 };
 
@@ -344,8 +352,15 @@ test "lexing function body" {
 }
 
 pub const Token = struct {
+    source_data: SourceData,
     data: TokenData,
     kind: TokenKind,
+};
+
+pub const SourceData = struct {
+    line: usize,
+    column: usize,
+    index: usize,
 };
 
 pub const TokenData = union(enum) {
@@ -382,7 +397,10 @@ pub const TokenKind = enum(u8) {
     comma,
     colon,
     semicolon,
+
     equals, // assignment and equality, depending on number of occurrences
+    less_than,
+    greater_than,
 
     right_arrow,
 
@@ -399,8 +417,8 @@ pub const TokenKind = enum(u8) {
     keyword_var, // declare variable
 
     keyword_if,
+    keyword_elif,
     keyword_else,
-    keyword_elseif,
     // keyword_switch
 
     keyword_while,
@@ -411,7 +429,11 @@ pub const TokenKind = enum(u8) {
     keyword_return,
 
     operator_add,
+    operator_add_assign,
     operator_sub,
+    operator_sub_assign,
     operator_mul,
+    operator_mul_assign,
     operator_div,
+    operator_div_assign,
 };

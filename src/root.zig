@@ -8,6 +8,11 @@ pub const U_INTEGER = u32;
 pub const FLOAT = f32;
 pub const CHAR = u8;
 
+test {
+    _ = @import("lexer.zig");
+    _ = @import("parser.zig");
+}
+
 pub const std_options = std.Options {
   .fmt_max_depth = 1000
 };
@@ -25,7 +30,8 @@ pub const Diagnostics = struct {
         message_is_allocated: bool = false,
         data: ?union(enum) {
             token_data: lexer.TokenData,
-            i: i32
+            i: i32,
+            u: usize,
         } = null,
     } = null,
 };
@@ -34,7 +40,7 @@ pub fn compile(source: STRING) !void {
     var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const alloc = gpa.allocator();
     defer {
-        std.log.info("Freeing compiling memory\n", .{});
+        std.log.info("Freeing compiler memory\n", .{});
         _ = gpa.deinit();
     }
 
@@ -59,37 +65,50 @@ pub fn compile(source: STRING) !void {
 
     var p: parser.Parser = .{
         .allocator = alloc,
-        .source = my_tokens,
+        .source = source,
+        .tokens = my_tokens,
     };
 
-    const node = try p.parse();
+    const parse_result = try p.parse();
+    std.log.info("Parsed all tokens to one {s}.", .{ @tagName(parse_result.value) });
 
-    std.debug.print("Parsed tokens.\n", .{});
-    printNode(node);
-
+    // -1 to negate the first body's indent
+    printNode(parse_result, -1);
 }
 
-fn printNode(node: *const parser.Node) void {
+fn printIndents(indents: isize) void {
+    const v = if (indents < 0) 0 else indents;
+    for (0..std.math.cast(usize, v).?) |_| {
+        std.debug.print("  ", .{});
+    }
+}
+
+fn printNode(node: *const parser.Node, indents: isize) void {
     switch (node.value) {
         .binary_op => {
-            printNode(node.value.binary_op.lhs);
-            const o: u8 = switch (node.value.binary_op.op) {
-                .add => '+',
-                .sub => '-',
-                .div => '/',
-                .mul => '*'
+            printNode(node.value.binary_op.lhs, indents);
+            const o = switch (node.value.binary_op.op) {
+                .add => "+", .adda => "+=",
+                .sub => "-", .suba => "-=",
+                .div => "/", .diva => "/=",
+                .mul => "*", .mula => "*=",
+
+                .gt => ">", .gte => ">=",
+                .lt => "<", .lte => "<=",
+                //else => "???"
             };
-            std.debug.print(" {c} ", .{ o });
-            printNode(node.value.binary_op.rhs);
+            std.debug.print(" {s} ", .{ o });
+            printNode(node.value.binary_op.rhs, indents);
         },
         .unary_op => {
             const o: u8 = switch (node.value.unary_op.op) {
                 .negate => '-',
             };
             std.debug.print("{c}", .{ o });
-            printNode(node.value.unary_op.rhs);
+            printNode(node.value.unary_op.rhs, indents);
         },
         .make_var => {
+            printIndents(indents);
             const make = node.value.make_var;
             std.debug.print("var ", .{});
             if (make.mods.constant) {
@@ -98,14 +117,15 @@ fn printNode(node: *const parser.Node) void {
             std.debug.print("{s}", .{ make.name.data.string.slice });
             if (make.typ != null) {
                 std.debug.print(": ", .{});
-                printNode(make.typ.?);
+                printNode(make.typ.?, indents);
             } else {
                 std.debug.print(": ?", .{});
             }
             std.debug.print(" = ", .{});
-            printNode(make.value);
+            printNode(make.value, indents);
         },
         .function_decl => {
+            printIndents(indents);
             const fun = node.value.function_decl;
             if (fun.mods.public) {
                 std.debug.print("pub ", .{});
@@ -116,33 +136,65 @@ fn printNode(node: *const parser.Node) void {
             std.debug.print("fn {s}(", .{fun.name.data.string.slice});
             for (fun.params) |p| {
                 std.debug.print("{s}: ", .{p.value.function_param.name.data.string.slice});
-                printNode(p.value.function_param.type);
+                printNode(p.value.function_param.type, indents);
             }
             std.debug.print(") -> ", .{});
-            printNode(fun.return_type);
+            printNode(fun.return_type, indents);
             if (fun.body.value != parser.NodeValue.body) {
                 std.debug.print(" = ", .{});
-                printNode(fun.body);
+                printNode(fun.body, indents);
                 return;
             }
             std.debug.print(" {{", .{});
-            for (fun.body.value.body.nodes) |line| {
-                std.debug.print("\n", .{});
-                printNode(&line);
-                std.debug.print(";", .{});
-            }
-            std.debug.print("\n}}\n", .{});
+            printNode(fun.body, indents);
+            std.debug.print("\n}}", .{});
         },
         .return_expr => {
+            printIndents(indents);
             std.debug.print("return ", .{});
-            printNode(node.value.return_expr);
+            printNode(node.value.return_expr, indents);
+        },
+        .body => {
+            printIndents(indents);
+            const body = node.value.body;
+            std.debug.print("\n", .{});
+            for (body.nodes, 0..) |n, i| {
+                printNode(&n, indents + 1);
+                if (body.nodes.len - 1 == i) {
+                    std.debug.print(";", .{});
+                } else {
+                    std.debug.print(";\n", .{});
+                }
+            }
+        },
+        ._if => {
+            printIndents(indents);
+            const _if = node.value._if;
+            std.debug.print("if (", .{});
+            printNode(_if.condition, indents + 1);
+            std.debug.print(") {{", .{});
+            printNode(_if.if_true, indents);
+            std.debug.print("\n", .{});
+            printIndents(indents);
+            std.debug.print("}}", .{});
+            if (_if.if_false == null) return;
+            std.debug.print(" else ", .{});
+            if (_if.if_false.?.*.value == parser.NodeValue.body) {
+                std.debug.print("{{", .{});
+                printNode(_if.if_false.?, indents);
+                std.debug.print("\n", .{});
+                printIndents(indents);
+                std.debug.print("}}", .{});
+            } else {
+                printNode(_if.if_false.?, indents);
+            }
         },
         .function_invoke => {
             const f = node.value.function_invoke;
-            printNode(f.namespace);
+            printNode(f.namespace, indents);
             std.debug.print("(", .{});
             for (f.args) |a| {
-                printNode(&a);
+                printNode(&a, indents);
             }
             std.debug.print(")", .{});
         },
@@ -182,8 +234,4 @@ fn printTokens(tokens: std.ArrayList(lexer.Token)) void {
         std.debug.print(", ", .{});
     }
     std.debug.print("\n", .{});
-}
-
-test "include lexer" {
-    _ = lexer.Lexer;
 }
