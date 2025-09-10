@@ -21,11 +21,7 @@ pub const Lexer = struct {
     // Testing
     initial_token_size: usize = 16,
 
-    const Error = error {
-        IsComment,
-    };
-
-    pub fn tokenize(self: *Self) !std.ArrayList(Token) {
+    pub fn tokenize(self: *Self) ![]Token {
         var arr = try std.ArrayListAligned(Token, null).initCapacity(self.allocator, self.initial_token_size);
         var i: usize = 0;
         self.i = 0;
@@ -41,7 +37,7 @@ pub const Lexer = struct {
             i += 1;
         }
 
-        return arr;
+        return arr.toOwnedSlice(self.allocator);
     }
 
     fn lex(self: *Self) !?Token {
@@ -93,7 +89,7 @@ pub const Lexer = struct {
                 .error_column = self.position_col,
                 .error_message = "Unexpected end of file."
             };
-            return error.EOF;
+            return Error.UnexpectedEndOfFile;
         }
     }
 
@@ -156,7 +152,10 @@ pub const Lexer = struct {
 
         while (std.ascii.isDigit(c) or c == '.') {
             if (c == '.') decimals +|= 1;
-            c = try self.nextChar();
+            c = self.nextChar() catch |e| {
+                if (e == Error.UnexpectedEndOfFile) break
+                else return e;
+            };
         }
 
         const str = self.source[start_i..self.i];
@@ -261,8 +260,8 @@ pub const Lexer = struct {
             ':' => .colon,
             ';' => .semicolon,
             '=' => .equals,
-            '<' => .less_than,
-            '>' => .greater_than,
+            '<' => .operator_less_than,
+            '>' => .operator_greater_than,
             '-' => arrow: {
                 const ch = self.source[self.i + 1];
                 if (ch == '>') {
@@ -291,22 +290,26 @@ pub const Lexer = struct {
             .source_data = self.currentSourceData()
         };
     }
+
+    pub const Error = error {
+        UnexpectedEndOfFile
+    };
 };
 
 test "lexing identifier" {
     const name = "identifier";
     var lexer = Lexer{ .allocator = std.testing.allocator, .source = name ++ ";" };
-    const token = try lexer.lex();
+    const token = (try lexer.lex()).?;
     try expect(token.kind == TokenKind.identifier);
     try expect(token.data == TokenData.string);
-    try expect(std.mem.eql(u8, token.data.string, name));
+    try expect(std.mem.eql(u8, token.data.string.slice, name));
 }
 
 test "lexing string" {
     const str = "hello";
     var lexer = Lexer{ .allocator = std.testing.allocator, .source = "\"" ++ str ++ "\"" };
-    const token = try lexer.lex();
-    defer lexer.allocator.free(token.data.string.raw);
+    const token = (try lexer.lex()).?;
+    defer lexer.allocator.free(token.data.string.raw.?);
     try expect(token.kind == TokenKind.literal_string);
     try expect(std.mem.eql(u8, token.data.string.slice, str));
 }
@@ -314,7 +317,7 @@ test "lexing string" {
 test "lexing integer" {
     const int = "214";
     var lexer = Lexer{ .allocator = std.testing.allocator, .source = int ++ ";" };
-    const token = try lexer.lex();
+    const token = (try lexer.lex()).?;
     try expect(token.kind == TokenKind.literal_integer);
     try expect(token.data.integer == try std.fmt.parseInt(root.INTEGER, int, 10));
 }
@@ -322,7 +325,7 @@ test "lexing integer" {
 test "lexing float" {
     const pi = "3.141592";
     var lexer = Lexer{ .allocator = std.testing.allocator, .source = pi ++ ";" };
-    const token = try lexer.lex();
+    const token = (try lexer.lex()).?;
     try expect(token.kind == TokenKind.literal_float);
     try expect(token.data.float == try std.fmt.parseFloat(root.FLOAT, pi));
 }
@@ -335,9 +338,8 @@ test "lexing function body" {
         \\    return thing.mutate();
         \\}
     };
-    var tokenList = try lexer.tokenize();
-    defer tokenList.deinit(lexer.allocator);
-    const tokens = tokenList.items;
+    const tokens = try lexer.tokenize();
+    defer std.testing.allocator.free(tokens);
     var kinds = [_]TokenKind{undefined} ** 19;
 
 
@@ -363,24 +365,29 @@ pub const SourceData = struct {
     index: usize,
 };
 
+pub const StringData = struct {
+    /// A slice only containing the characters of the string
+        slice: root.STRING,
+    /// The raw allocated array. Should be freed when finished.
+        raw: ?root.HEAP_STRING = null,
+};
+
 pub const TokenData = union(enum) {
     /// An allocated string slice, typically for literal_strings.
     /// This is because escape sequences lead to more than just
     /// source slices.
-    string: struct {
-        /// A slice only containing the characters of the string
-        slice: root.STRING,
-        /// The raw allocated array. Should be freed when finished.
-        raw: ?root.HEAP_STRING = null,
-    },
-    char: root.CHAR,
+    string: StringData,
     integer: root.INTEGER,
     u_integer: root.U_INTEGER,
     float: root.FLOAT,
+    char: root.CHAR,
+    bool: bool,
     none,
 };
 
 pub const TokenKind = enum(u8) {
+    identifier,
+
     literal_string,
     literal_integer,
     literal_float,
@@ -397,18 +404,13 @@ pub const TokenKind = enum(u8) {
     comma,
     colon,
     semicolon,
-
     equals, // assignment and equality, depending on number of occurrences
-    less_than,
-    greater_than,
 
     right_arrow,
 
     keyword_pub, // declaration modifier
 
     keyword_const, // type or expression modifier
-
-    identifier,
 
     keyword_struct,
     keyword_enum,
@@ -436,4 +438,7 @@ pub const TokenKind = enum(u8) {
     operator_mul_assign,
     operator_div,
     operator_div_assign,
+
+    operator_less_than,
+    operator_greater_than,
 };
