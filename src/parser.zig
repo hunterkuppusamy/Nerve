@@ -310,7 +310,7 @@ pub const Parser = struct {
     tokens: []Token,
 
     // State
-    i: usize = 0,
+    _i: usize = 0,
     diagnostics: Diagnostics = .{},
 
     fn peek(self: *Parser) !TokenKind {
@@ -318,16 +318,16 @@ pub const Parser = struct {
     }
 
     fn seek(self: *Parser, o: isize) !TokenKind {
-        const i = std.math.cast(usize, std.math.cast(isize, self.i).? + o).?;
+        const i = std.math.cast(usize, std.math.cast(isize, self._i).? + o).?;
         return if (i < self.tokens.len) self.tokens[i].kind else Error.UnexpectedEndOfFile;
     }
 
     fn consume(self: *Parser, kind: TokenKind) !Token {
-        if (self.i >= self.tokens.len) return Error.UnexpectedEndOfFile;
-        const token = self.tokens[self.i];
+        if (self._i >= self.tokens.len) return Error.UnexpectedEndOfFile;
+        const token = self.tokens[self._i];
         std.log.info("Try consume '{s}'", .{@tagName(kind)});
         if (token.kind == kind) {
-            self.i += 1;
+            self._i += 1;
             return token;
         } else {
             self.diagnostics.err = .{ .error_type = Error.UnexpectedToken, .data = .{ .u = @intFromEnum(kind) } };
@@ -336,7 +336,7 @@ pub const Parser = struct {
     }
 
     pub fn parse(self: *Parser) !*Node {
-        self.i = 0;
+        self._i = 0;
 
         const ret = body(self) catch |e| {
             switch (e) {
@@ -378,14 +378,14 @@ fn generalUnexpectedToken(self: *Parser) !void {
 }
 
 fn iWantedThingHere(self: *Parser, thing: []const u8) !void {
-    const token = self.tokens[self.i];
+    const token = self.tokens[self._i];
     std.log.err("Expected '{s}', but got '{s}'\n", .{ thing, @tagName(token.kind) });
     const back_dist = 3;
     const forward_dist = 3;
-    const min = if (self.i < back_dist) self.i else self.i - back_dist;
-    const max = if (self.tokens.len < forward_dist) self.tokens.len - 1 else self.i + forward_dist + 1;
+    const min = if (self._i < back_dist) self._i else self._i - back_dist;
+    const max = if (self.tokens.len < forward_dist) self.tokens.len - 1 else self._i + forward_dist + 1;
     for (self.tokens[min..max], 0..) |tok, i| {
-        if (min + i == self.i) {
+        if (min + i == self._i) {
             std.log.err("// Wanted '{s}' here.", .{ thing });
             std.log.err("---> {s} <---, ", .{@tagName(tok.kind)});
         } else std.log.err("{s}, ", .{@tagName(tok.kind)});
@@ -648,7 +648,7 @@ fn body(self: *Parser) !Node {
     var s = try self.doAlloc(statement);
     try statements.append(self.allocator, s);
 
-    while (self.i + 1 < self.tokens.len) {
+    while (self._i + 1 < self.tokens.len) {
         if (try self.seek(-1) != .close_brace)
             _ = try self.consume(.semicolon);
         if (try self.peek() == .close_brace) {

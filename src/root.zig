@@ -13,6 +13,7 @@ test {
     _ = @import("lexer.zig");
     _ = @import("parser.zig");
     _ = @import("bytecode_gen.zig");
+    _ = @import("typechecker.zig");
 }
 
 pub const std_options = std.Options {

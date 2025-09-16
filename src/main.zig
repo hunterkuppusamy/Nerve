@@ -21,7 +21,7 @@ pub fn main() !void {
         \\      return a;
         \\  } else {
         \\      return h(b) * 2;
-        \\  };
+        \\  }
         \\}
         \\
         \\fn new() -> none = 1;
