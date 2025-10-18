@@ -1,8 +1,7 @@
 const std = @import("std");
-const lexer = @import("lexer.zig");
+const lexer = @import("tokenizer.zig");
 const parser = @import("parser.zig");
-const terminal = @import("util/terminal.zig");
-const r = @import("root");
+const terminal = @import("util").terminal;
 
 pub const INTEGER = i32;
 pub const U_INTEGER = u32;
@@ -10,10 +9,14 @@ pub const FLOAT = f32;
 pub const CHAR = u8;
 
 test {
-    _ = @import("lexer.zig");
+    _ = @import("tokenizer.zig");
     _ = @import("parser.zig");
-    _ = @import("bytecode_gen.zig");
-    _ = @import("typechecker.zig");
+    _ = @import("ConstantPool.zig");
+    _ = @import("jvm/bytecode.zig");
+    _ = @import("jvm/gen.zig");
+    _ = @import("jvm/format.zig");
+    _ = @import("jvm/read.zig");
+    _ = @import("jvm/write.zig");
 }
 
 pub const std_options = std.Options {
@@ -39,81 +42,38 @@ pub const Diagnostics = struct {
     } = null,
 };
 
-pub fn compile(source: STRING) !void {
-    var gpa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const alloc = gpa.allocator();
+pub fn compile(source: []const u8) !void {
+    const gpa = std.heap.page_allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    const alloc = arena.allocator();
     defer {
-        terminal.setColor(.foreground, .{ .attribute = .reset });
+        terminal.setState(.foreground, .{ .attribute = .reset });
         std.log.info("Freeing compiler memory\n", .{});
-        _ = gpa.deinit();
+        _ = arena.deinit();
     }
-    terminal.setColor(.underline, .{ .color = .black });
-    terminal.setColor(.underline, .{ .color = .black });
-    terminal.setColor(.foreground, .{ .color = .blue });
+    terminal.setState(.underline, .{ .color = .black });
+    terminal.setState(.underline, .{ .color = .black });
+    terminal.setState(.foreground, .{ .color = .blue });
 
-    var l: lexer.Lexer = .{
-        .source = source,
-        .i = 0,
-        .position_row = 0,
-        .position_col = 0,
-        .allocator = alloc
-    };
+    var lex = lexer.Tokenizer.init(alloc, source);
 
     std.debug.print("Tokenizing...\n", .{});
 
-    const tokens = try l.tokenize();
-    defer l.allocator.free(tokens);
-
-    printTokens(tokens);
+    const tokens = try lex.tokenize();
+    defer lex.allocator.free(tokens);
 
     //std.debug.print("Alignment of token = {}\n", .{ @alignOf(lexer.Token) });
 
-    var p: parser.Parser = .{
-        .allocator = alloc,
-        .source = source,
-        .tokens = tokens,
-    };
+    var parse = parser.Parser.init(alloc, tokens, source);
 
-    const parse_result = try p.parse();
+    const nodes = try parse.parse();
 
-    std.log.info("Parsed all tokens to one {s}.", .{ @tagName(parse_result.value) });
+    std.log.info("Parsed all tokens to one {s}.", .{ @tagName(nodes.*) });
 
-    terminal.setColor(.background, .{ .attribute = .italic });
-    terminal.setColor(.foreground, .{ .color = .green });
+    terminal.setState(.background, .{ .attribute = .italic });
+    terminal.setState(.foreground, .{ .color = .green });
 
     // -1 to negate the first body's indent
-    parse_result.print(-1);
-    std.debug.print("\n", .{});
-}
-
-fn printIndents(indents: isize) void {
-    const v = if (indents < 0) 0 else indents;
-    for (0..std.math.cast(usize, v).?) |_| {
-        std.debug.print("  ", .{});
-    }
-}
-
-
-fn printTokens(tokens: []lexer.Token) void {
-    std.debug.print("Tokens: ", .{});
-    for (tokens) |token| {
-        std.debug.print("{s}", .{ @tagName(token.kind) });
-        switch (token.data) {
-            .string => {
-                const str = token.data.string.slice;
-                std.debug.print("={s} (", .{ str });
-                for (str) |c| {
-                    std.debug.print("{} ", .{ c });
-                }
-                std.debug.print(")", .{});
-            },
-            .char => std.debug.print("={c}", .{ token.data.char }),
-            .float => std.debug.print("={any}", .{ token.data.float }),
-            .integer => std.debug.print("={any}", .{ token.data.integer }),
-            .u_integer => std.debug.print("={any}", .{ token.data.u_integer }),
-            else => {},
-        }
-        std.debug.print(", ", .{});
-    }
+    nodes.print(-1);
     std.debug.print("\n", .{});
 }

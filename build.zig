@@ -21,6 +21,12 @@ pub fn build(b: *std.Build) void {
     // target and optimize options) will be listed when running `zig build --help`
     // in this directory.
 
+    const mod_util = b.addModule("util", .{
+        .root_source_file = b.path("src/util/util.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // This creates a module, which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.
     // Zig modules are the preferred way of making Zig code available to consumers.
@@ -39,6 +45,10 @@ pub fn build(b: *std.Build) void {
         // Later on we'll use this module as the root module of a test executable
         // which requires us to specify a target.
         .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "util", .module = mod_util }
+        }
     });
 
     // Here we define an executable. An executable needs to have a root module
@@ -79,6 +89,7 @@ pub fn build(b: *std.Build) void {
                 // can be extremely useful in case of collisions (which can happen
                 // importing modules from different packages).
                 .{ .name = "Nerve", .module = mod },
+                .{ .name = "util", .module = mod_util }
             },
         }),
     });
@@ -120,7 +131,11 @@ pub fn build(b: *std.Build) void {
     // set the releative field.
     const mod_tests = b.addTest(.{
         .root_module = mod,
-        .name = "root-test"
+        .name = "root-test",
+        .test_runner = .{
+            .mode = .simple,
+            .path = b.path("test_runner.zig")
+        },
     });
 
     // A run step that will run the test executable.
@@ -131,7 +146,11 @@ pub fn build(b: *std.Build) void {
     // hence why we have to create two separate ones.
     const exe_tests = b.addTest(.{
         .root_module = exe.root_module,
-        .name = "cli-test"
+        .name = "cli-test",
+        .test_runner = .{
+            .mode = .simple,
+            .path = b.path("test_runner.zig")
+        },
     });
 
 

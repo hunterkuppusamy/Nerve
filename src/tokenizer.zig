@@ -94,12 +94,12 @@ pub const TokenKind = enum(u8) {
     operator_greater_than,
 };
 
-pub const Lexer = struct {
+pub const Tokenizer = struct {
     const Self = @This();
 
     // Parameters
     allocator: std.mem.Allocator,
-    source: root.STRING,
+    source: []const u8,
 
     // State
     i: usize = 0,
@@ -110,6 +110,13 @@ pub const Lexer = struct {
 
     // Testing
     initial_token_size: usize = 16,
+
+    pub fn init(gpa: std.mem.Allocator, source: []const u8) Tokenizer {
+        return .{
+            .allocator = gpa,
+            .source = source,
+        };
+    }
 
     pub fn tokenize(self: *Self) ![]Token {
         var arr = try std.ArrayListAligned(Token, null).initCapacity(self.allocator, self.initial_token_size);
@@ -186,7 +193,7 @@ pub const Lexer = struct {
     fn lexKeywordOrIdentifier(self: *Self) !Token {
         var c = self.source[self.i]; // char from lex()
         const start_i = self.i;
-        while (std.ascii.isAlphanumeric(c)) {
+        while (std.ascii.isAlphanumeric(c) or c == '_' or c == '-') {
             c = self.nextChar() catch break;
         }
 
@@ -388,7 +395,7 @@ pub const Lexer = struct {
 
 test "lexing identifier" {
     const name = "identifier";
-    var lexer = Lexer{ .allocator = std.testing.allocator, .source = name ++ ";" };
+    var lexer = Tokenizer{ .allocator = std.testing.allocator, .source = name ++ ";" };
     const token = (try lexer.lex()).?;
     try expect(token.kind == TokenKind.identifier);
     try expect(token.data == TokenData.string);
@@ -397,7 +404,7 @@ test "lexing identifier" {
 
 test "lexing string" {
     const str = "hello";
-    var lexer = Lexer{ .allocator = std.testing.allocator, .source = "\"" ++ str ++ "\"" };
+    var lexer = Tokenizer{ .allocator = std.testing.allocator, .source = "\"" ++ str ++ "\"" };
     const token = (try lexer.lex()).?;
     defer lexer.allocator.free(token.data.string.raw.?);
     try expect(token.kind == TokenKind.literal_string);
@@ -406,7 +413,7 @@ test "lexing string" {
 
 test "lexing integer" {
     const int = "214";
-    var lexer = Lexer{ .allocator = std.testing.allocator, .source = int ++ ";" };
+    var lexer = Tokenizer{ .allocator = std.testing.allocator, .source = int ++ ";" };
     const token = (try lexer.lex()).?;
     try expect(token.kind == TokenKind.literal_integer);
     try expect(token.data.integer == try std.fmt.parseInt(root.INTEGER, int, 10));
@@ -414,14 +421,14 @@ test "lexing integer" {
 
 test "lexing float" {
     const pi = "3.141592";
-    var lexer = Lexer{ .allocator = std.testing.allocator, .source = pi ++ ";" };
+    var lexer = Tokenizer{ .allocator = std.testing.allocator, .source = pi ++ ";" };
     const token = (try lexer.lex()).?;
     try expect(token.kind == TokenKind.literal_float);
     try expect(token.data.float == try std.fmt.parseFloat(root.FLOAT, pi));
 }
 
 test "lexing function body" {
-    var lexer = Lexer{ .allocator = std.testing.allocator, .source = 
+    var lexer = Tokenizer{ .allocator = std.testing.allocator, .source =
         \\pub fn helloWorld(
         \\    thing: Thing
         \\) -> Thing {

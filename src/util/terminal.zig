@@ -1,8 +1,72 @@
 const std = @import("std");
-const Writer = std.io.Writer;
+const io = std.Io;
+const os = std.os;
+const builtin = @import("builtin");
+const Writer = io.Writer;
 
-pub const Color = union(enum) {
-    rgb: struct {
+const Size = struct {
+    x: u16, y: u16,
+};
+
+fn termSize(file: std.fs.File) !?Size {
+    if (!file.supportsAnsiEscapeCodes()) {
+        return null;
+    }
+    return switch (builtin.os.tag) {
+        .windows => blk: {
+            var buf: os.windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+            break :blk switch (os.windows.kernel32.GetConsoleScreenBufferInfo(
+                file.handle,
+                &buf,
+            )) {
+                os.windows.TRUE => .{
+                    .x = @intCast(buf.srWindow.Right - buf.srWindow.Left + 1),
+                    .y = @intCast(buf.srWindow.Bottom - buf.srWindow.Top + 1),
+                },
+                else => error.Unexpected,
+            };
+        },
+        .linux, .macos => blk: {
+            var buf: std.posix.winsize = undefined;
+            break :blk switch (std.posix.errno(
+                std.posix.system.ioctl(
+                    file.handle,
+                    std.posix.T.IOCGWINSZ,
+                    @intFromPtr(&buf),
+                ),
+            )) {
+                .SUCCESS => .{
+                    .x = buf.col,
+                    . y= buf.row,
+                },
+                else => error.IoctlError,
+            };
+        },
+        else => error.Unsupported,
+    };
+}
+
+pub fn size() Size {
+    const file = switch (builtin.os.tag) {
+        .linux => std.fs.openFileAbsolute("/dev/tty", .{ .mode = .read_write })
+            catch @panic("Cannot open '/dev/tty'."),
+        else => std.fs.File.stdout(),
+    };
+    if (!file.isTty()) return .{ .x = 50, .y = 50 };
+    return termSize(file) catch @panic("Could not get terminal size.") orelse .{ .x = 50, .y = 50};
+}
+
+pub fn columns() usize {
+    return if (size().x == 0) 50 else size().x;
+}
+
+pub fn rows() usize {
+    return if (size().y == 0) 50 else size().y;
+}
+
+
+pub const State = union(enum) {
+    rgb_color: struct {
         u8, u8, u8
     },
     attribute: enum(u6) {
@@ -57,20 +121,20 @@ pub const ColorSpace = enum(u6) {
     underline = 58,
 };
 
-pub fn setColor(s: ColorSpace, c: Color) void {
+pub fn setState(s: ColorSpace, c: State) void {
     var buf: [64]u8 = undefined;
     const w = std.debug.lockStderrWriter(&buf);
     defer std.debug.unlockStderrWriter();
-    setWriterColor(w, s, c) catch return;
+    setTerminalState(w, s, c) catch return;
 }
 
-pub fn setWriterColor(w: *Writer, s: ColorSpace, c: Color) !void {
+pub fn setTerminalState(w: *Writer, s: ColorSpace, c: State) !void {
     switch (c) {
         .color => {
             try w.print("\x1b[{};5;{}m", .{ @intFromEnum(s), @intFromEnum(c.color) });
         },
-        .rgb => {
-            try w.print("\x1b[{};2;{};{};{}m", .{ @intFromEnum(s), c.rgb.@"0", c.rgb.@"1", c.rgb.@"2" });
+        .rgb_color => {
+            try w.print("\x1b[{};2;{};{};{}m", .{ @intFromEnum(s), c.rgb_color.@"0", c.rgb_color.@"1", c.rgb_color.@"2" });
         },
         .attribute => {
             try w.print("\x1b[{}m", .{ @intFromEnum(c.attribute) });
