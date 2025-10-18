@@ -59,6 +59,35 @@ pub const Type = union(enum) {
         };
     }
 
+    pub fn lookup(name: []const u8) ?Type {
+        _ = name;
+        return null;
+    }
+
+    pub fn ofClass(gpa: std.mem.Allocator, class: *Class) !Type {
+        const name = class.constant_pool.items[class.this_class - 1].utf_8_info.bytes;
+        const fields = try std.ArrayList(Struct.Field).initCapacity(gpa, 16);
+        for (class.fields.items) |f| {
+            const fname = class.constant_pool.items[f.name_index - 1].utf_8_info.bytes;
+            try fields.append(gpa, .{
+                .access = f.access_flags,
+                .name = try gpa.dupe(u8, fname),
+                .type = Type {
+                    .@"extern" = .{
+                        // TODO parse descriptor
+                        .jvm_class = f.descriptor_index,
+                    }
+                }
+            });
+        }
+        return Type {
+            .@"struct" = .{
+                .name = try gpa.dupe(u8, name),
+                .fields = 0,
+            }
+        };
+    }
+
     pub const Struct = struct {
         name: []const u8,
         // fields are functions

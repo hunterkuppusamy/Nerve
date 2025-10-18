@@ -596,6 +596,11 @@ pub const Op = struct {
         ILOAD_1 = 0x1b,
         ILOAD_2 = 0x1c,
         ILOAD_3 = 0x1d,
+        ALOAD_0 = 42,
+        ALOAD_1 = 43,
+        ALOAD_2 = 44,
+        ALOAD_3 = 45,
+        AALOAD = 50,
         // ... (other load_n, wide, etc.)
 
         // Stores
@@ -608,6 +613,11 @@ pub const Op = struct {
         ISTORE_1 = 0x3c,
         ISTORE_2 = 0x3d,
         ISTORE_3 = 0x3e,
+        ASTORE_0 = 75,
+        ASTORE_1 = 76,
+        ASTORE_2 = 77,
+        ASTORE_3 = 78,
+        AASTORE = 83,
         // ... (other store_n, wide, etc.)
 
         // Stack
@@ -645,6 +655,8 @@ pub const Op = struct {
         IF_ICMPGE = 0xa2,
         IF_ICMPGT = 0xa3,
         IF_ICMPLE = 0xa4,
+        IFNULL = 198,
+        IFNONNULL = 199,
         GOTO_W = 0xc8,
         // ... (other branch instructions)
 
@@ -673,11 +685,12 @@ pub const Op = struct {
         // ... (others, e.g. monitorenter, monitorexit)
 
         // Exception / others
+        MONITORENTER = 194,
+        MONITOREXIT = 195,
         ATHROW = 0xbf,
         // Reserved / special
         IMPDEP1 = 0xfe,
         IMPDEP2 = 0xff,
-        _
     };
 
     pub fn meta(op: Code) ?Meta {
@@ -704,13 +717,27 @@ pub const Op = struct {
             .FLOAD => .{ .mnemonic = "fload", .operand_form = .local, .stack_pop = 0, .stack_push = 1 },
             .DLOAD => .{ .mnemonic = "dload", .operand_form = .local, .stack_pop = 0, .stack_push = 1 },
             .ALOAD => .{ .mnemonic = "aload", .operand_form = .local, .stack_pop = 0, .stack_push = 1 },
+            .ALOAD_0 => .{ .mnemonic = "aload_0", .operand_form = .none, .stack_pop = 0, .stack_push = 1 },
+            .ALOAD_1 => .{ .mnemonic = "aload_1", .operand_form = .none, .stack_pop = 0, .stack_push = 1 },
+            .ALOAD_2 => .{ .mnemonic = "aload_2", .operand_form = .none, .stack_pop = 0, .stack_push = 1 },
+            .ALOAD_3 => .{ .mnemonic = "aload_3", .operand_form = .none, .stack_pop = 0, .stack_push = 1 },
+            .AALOAD => .{ .mnemonic = "aaload", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
 
             // Stores
             .ISTORE => .{ .mnemonic = "istore", .operand_form = .local, .stack_pop = 1, .stack_push = 0 },
+            .ISTORE_0 => .{ .mnemonic = "istore_0", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
+            .ISTORE_1 => .{ .mnemonic = "istore_1", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
+            .ISTORE_2 => .{ .mnemonic = "istore_2", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
+            .ISTORE_3 => .{ .mnemonic = "istore_3", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
             .LSTORE => .{ .mnemonic = "lstore", .operand_form = .local, .stack_pop = 1, .stack_push = 0 },
             .FSTORE => .{ .mnemonic = "fstore", .operand_form = .local, .stack_pop = 1, .stack_push = 0 },
             .DSTORE => .{ .mnemonic = "dstore", .operand_form = .local, .stack_pop = 1, .stack_push = 0 },
             .ASTORE => .{ .mnemonic = "astore", .operand_form = .local, .stack_pop = 1, .stack_push = 0 },
+            .ASTORE_0 => .{ .mnemonic = "astore_0", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
+            .ASTORE_1 => .{ .mnemonic = "astore_1", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
+            .ASTORE_2 => .{ .mnemonic = "astore_2", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
+            .ASTORE_3 => .{ .mnemonic = "astore_3", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
+            .AASTORE => .{ .mnemonic = "aastore", .operand_form = .none, .stack_pop = 3, .stack_push = 0 },
 
             // Stack operations
             .POP => .{ .mnemonic = "pop", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
@@ -734,6 +761,8 @@ pub const Op = struct {
             .IFEQ => .{ .mnemonic = "ifeq", .operand_form = .branch_offset, .stack_pop = 1, .stack_push = 0 },
             .IFNE => .{ .mnemonic = "ifne", .operand_form = .branch_offset, .stack_pop = 1, .stack_push = 0 },
             .IF_ICMPEQ => .{ .mnemonic = "if_icmpeq", .operand_form = .branch_offset, .stack_pop = 2, .stack_push = 0 },
+            .IFNONNULL => .{ .mnemonic = "ifnonnull", .operand_form = .branch_offset, .stack_pop = 1, .stack_push = 0 },
+            .IFNULL => .{ .mnemonic = "ifnull", .operand_form = .branch_offset, .stack_pop = 1, .stack_push = 0 },
             .GOTO_W => .{ .mnemonic = "goto_w", .operand_form = .offset_w, .stack_pop = 0, .stack_push = 0 },
 
             // Method invocation & return
@@ -741,25 +770,27 @@ pub const Op = struct {
             .IRETURN => .{ .mnemonic = "ireturn", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
             .FRETURN => .{ .mnemonic = "freturn", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
             .ARETURN => .{ .mnemonic = "areturn", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
-            .INVOKEVIRTUAL => .{ .mnemonic = "invokevirtual", .operand_form = .U16, .stack_pop = -1, .stack_push = -1 }, // pop: objectref + args, push: return value
-            .INVOKESPECIAL => .{ .mnemonic = "invokespecial", .operand_form = .U16, .stack_pop = -1, .stack_push = -1 },
-            .INVOKESTATIC => .{ .mnemonic = "invokestatic", .operand_form = .U16, .stack_pop = -1, .stack_push = -1 },
-            .INVOKEINTERFACE => .{ .mnemonic = "invokeinterface", .operand_form = .U16, .stack_pop = -1, .stack_push = -1 },
-            .INVOKEDYNAMIC => .{ .mnemonic = "invokedynamic", .operand_form = .U16, .stack_pop = -1, .stack_push = -1 },
+            .INVOKEVIRTUAL => .{ .mnemonic = "invokevirtual", .operand_form = .U16_constant, .stack_pop = -1, .stack_push = -1 }, // pop: objectref + args, push: return value
+            .INVOKESPECIAL => .{ .mnemonic = "invokespecial", .operand_form = .U16_constant, .stack_pop = -1, .stack_push = -1 },
+            .INVOKESTATIC => .{ .mnemonic = "invokestatic", .operand_form = .U16_constant, .stack_pop = -1, .stack_push = -1 },
+            .INVOKEINTERFACE => .{ .mnemonic = "invokeinterface", .operand_form = .U16_constant, .stack_pop = -1, .stack_push = -1 },
+            .INVOKEDYNAMIC => .{ .mnemonic = "invokedynamic", .operand_form = .U16_constant, .stack_pop = -1, .stack_push = -1 },
 
             // Field / object
-            .GETSTATIC => .{ .mnemonic = "getstatic", .operand_form = .U16, .stack_pop = 0, .stack_push = 1 },
-            .PUTSTATIC => .{ .mnemonic = "putstatic", .operand_form = .U16, .stack_pop = 1, .stack_push = 0 },
-            .GETFIELD => .{ .mnemonic = "getfield", .operand_form = .U16, .stack_pop = 1, .stack_push = 1 },
-            .PUTFIELD => .{ .mnemonic = "putfield", .operand_form = .U16, .stack_pop = 2, .stack_push = 0 },
+            .GETSTATIC => .{ .mnemonic = "getstatic", .operand_form = .U16_constant, .stack_pop = 0, .stack_push = 1 },
+            .PUTSTATIC => .{ .mnemonic = "putstatic", .operand_form = .U16_constant, .stack_pop = 1, .stack_push = 0 },
+            .GETFIELD => .{ .mnemonic = "getfield", .operand_form = .U16_constant, .stack_pop = 1, .stack_push = 1 },
+            .PUTFIELD => .{ .mnemonic = "putfield", .operand_form = .U16_constant, .stack_pop = 2, .stack_push = 0 },
             .NEW => .{ .mnemonic = "new", .operand_form = .U16, .stack_pop = 0, .stack_push = 1 },
             .NEWARRAY => .{ .mnemonic = "newarray", .operand_form = .U8, .stack_pop = 1, .stack_push = 1 },
             .ANEWARRAY => .{ .mnemonic = "anewarray", .operand_form = .U16, .stack_pop = 1, .stack_push = 1 },
             .ARRAYLENGTH => .{ .mnemonic = "arraylength", .operand_form = .none, .stack_pop = 1, .stack_push = 1 },
             .CHECKCAST => .{ .mnemonic = "checkcast", .operand_form = .U16, .stack_pop = 1, .stack_push = 1 },
-            .INSTANCEOF => .{ .mnemonic = "instanceof", .operand_form = .U16, .stack_pop = 1, .stack_push = 1 },
+            .INSTANCEOF => .{ .mnemonic = "instanceof", .operand_form = .U16_constant, .stack_pop = 1, .stack_push = 1 },
 
             // Exception / other
+            .MONITORENTER => .{ .mnemonic = "monitorenter", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
+            .MONITOREXIT => .{ .mnemonic = "monitorexit", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
             .ATHROW => .{ .mnemonic = "athrow", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
             .IMPDEP1 => .{ .mnemonic = "impdep1", .operand_form = .none, .stack_pop = 0, .stack_push = 0 },
             .IMPDEP2 => .{ .mnemonic = "impdep2", .operand_form = .none, .stack_pop = 0, .stack_push = 0 },

@@ -7,11 +7,14 @@ const Op = format.Op;
 const Code = Op.Code;
 const Node = @import("../AST.zig").Node;
 const Class = format.Class;
+const read = @import("read.zig");
 
 pub const CodeContext = struct {
     allocator: std.mem.Allocator,
     /// String Variable Name -> Local Variable Index
     data: std.Io.Writer.Allocating,
+    /// Constant Class ref index -> Type
+    imported: std.AutoHashMap(u16, Type),
     locals: Stack(Local),
     cpool: *ConstantPool,
     stack: Stack(JvmStackType),
@@ -35,6 +38,7 @@ pub const CodeContext = struct {
             .data = std.Io.Writer.Allocating.init(allocator),
             .cpool = cpool,
             .locals = try Stack(Local).init(allocator),
+            .imported = std.AutoHashMap(u16, Type).init(allocator),
             .stack = try Stack(JvmStackType).init(allocator),
         };
     }
@@ -282,6 +286,15 @@ fn createBuiltin(context: *CodeContext, name: []const u8, args: []Node) !void {
         const class = args[0].string.data;
         const class_h = try context.cpool.add_class(class);
         try context.pushConstant(class_h);
+        var split = std.mem.splitScalar(u8, class, ':');
+        const mode = split.next() orelse "undefined";
+        var import: Type = undefined;
+        if (std.mem.eql(u8, mode, "jvm")) {
+            import = try read.readClass(context.allocator, split.rest());
+        } else {
+            import = Type.lookup().?;
+        }
+        try context.imported.put(class_h, import);
     } else if (std.mem.eql(u8, name, "asm")) {
         const codes = @typeInfo(Op.Code).@"enum".fields;
         const getCode = struct {
@@ -321,45 +334,65 @@ fn createFieldAccess(context: *CodeContext, field: []const u8, typ: Type) !void 
     }
 }
 
+const sout = std.debug.print;
+
 pub fn print(bytecode: []const u8, print_constants: ?*Class) !void {
-    const sout = std.debug.print;
     var fixedReader = std.Io.Reader.fixed(bytecode);
-    const printConstant = struct {
-        pub fn invoke(comptime width: type, r: *std.Io.Reader, maybePool: ?*Class) !void {
-            const indx = try r.takeInt(width, .big);
-            sout(", {any}", .{ indx });
-            if (maybePool) |pool| {
-                const cp = pool.constant_pool.items;
-                sout(" ({s} ", .{ @tagName(cp[indx - 1]) });
-                switch (cp[indx - 1]) {
-                    .utf_8_info => |c| sout("'{s}'", .{ c.bytes }),
-                    .class_info => |c| sout("{s}", .{ cp[c.name_index - 1].utf_8_info.bytes }),
-                    .integer_info => |c| sout("{d}", .{ std.math.cast(i32, c.bytes).? }),
-                    .name_and_type_info => |c| sout("{s} {s}", .{ cp[c.name_index - 1].utf_8_info.bytes, cp[c.descriptor_index - 1].utf_8_info.bytes }),
-                    else => |c| sout("{any}", .{ c }),
-                }
-                sout(")\n", .{});
-            } else sout("\n", .{});
-        }
-    }.invoke;
     const r = &fixedReader;
     while (r.seek < r.end) {
-        const code: Op.Code = @enumFromInt(try r.takeByte());
-        const meta = Op.meta(code) orelse continue;
-        sout(" | {s}", .{ meta.mnemonic });
-        switch (meta.operand_form) {
-            .none => sout("\n", .{}),
-            .I8, => sout(", {any}\n", .{ try r.takeInt(i8, .big) }),
-            .U8, .local => sout(", {any}\n", .{ try r.takeInt(u8, .big) }),
-            .U16 => sout(", {any}\n", .{ try r.takeInt(u16, .big) }),
-            .I16 => sout(", {any}\n", .{ try r.takeInt(i16, .big) }),
-            .U8_constant => try printConstant(u8, r, print_constants),
-            .U16_constant => try printConstant(u16, r, print_constants),
-            .branch_offset => sout(", {any}\n", .{ try r.takeInt(i16, .big) }),
-            else => {
-                std.debug.print("\nUnhandled operand form '{s}'.\n", .{ @tagName(meta.operand_form) });
-                return error.Unhandled;
+        var code: ?Op.Code = null;
+        const op_byte = try r.takeByte();
+        inline for (@typeInfo(Op.Code).@"enum".fields) |op| {
+            if (op.value == op_byte) {
+                code = @enumFromInt(op.value);
             }
+        }
+        if (code == null) {
+            std.debug.print("Unknown op code {}.\n", .{ op_byte });
+            return error.UnknownOpCode;
+        }
+        printOp(r, print_constants, code.?) catch |e| {
+            sout("\nError while printing op {?}.\n", .{ code });
+            return e;
+        };
+    }
+}
+
+fn printConstant(comptime width: type, r: *std.Io.Reader, maybePool: ?*Class) !void {
+    const indx = try r.takeInt(width, .big);
+    sout(", {any}", .{ indx });
+    if (maybePool) |pool| {
+        const cp = pool.constant_pool.items;
+        sout(" ({s} ", .{ @tagName(cp[indx - 1]) });
+        switch (cp[indx - 1]) {
+            .utf_8_info => |c| sout("'{s}'", .{ c.bytes }),
+            .class_info => |c| sout("{s}", .{ cp[c.name_index - 1].utf_8_info.bytes }),
+            .integer_info => |c| sout("{d}", .{ std.math.cast(i32, c.bytes).? }),
+            .name_and_type_info => |c| sout("{s} {s}", .{
+                cp[c.name_index - 1].utf_8_info.bytes,
+                cp[c.descriptor_index - 1].utf_8_info.bytes }
+            ),
+            else => |c| sout("{any}", .{ c }),
+        }
+        sout(")\n", .{});
+    } else sout("\n", .{});
+}
+
+fn printOp(r: *std.Io.Reader, class: ?*Class, op: Op.Code) !void {
+    const meta = Op.meta(op) orelse return error.UndefinedMeta;
+    sout(" | {s}", .{ meta.mnemonic });
+    switch (meta.operand_form) {
+        .none => sout("\n", .{}),
+        .I8, => sout(", {any}\n", .{ try r.takeInt(i8, .big) }),
+        .U8, .local => sout(", {any}\n", .{ try r.takeInt(u8, .big) }),
+        .U16 => sout(", {any}\n", .{ try r.takeInt(u16, .big) }),
+        .I16 => sout(", {any}\n", .{ try r.takeInt(i16, .big) }),
+        .U8_constant => try printConstant(u8, r, class),
+        .U16_constant => try printConstant(u16, r, class),
+        .branch_offset => sout(", {any}\n", .{ try r.takeInt(i16, .big) }),
+        else => {
+            std.debug.print("\nUnhandled operand form '{s}'.\n", .{ @tagName(meta.operand_form) });
+            return error.Unhandled;
         }
     }
 }

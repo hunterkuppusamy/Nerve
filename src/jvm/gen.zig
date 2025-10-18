@@ -111,7 +111,7 @@ test "generation" {
 
     const source = \\fn fake_main() -> void {
                    \\var a = 13249320;
-                   \\var class = [import]("java/lang/System");
+                   \\var class = [import]("jvm:java/lang/System");
                    \\return;
                    \\}
     ;

@@ -2,7 +2,7 @@ const std = @import("std");
 const format = @import("format.zig");
 const Class = format.Class;
 
-fn readClassFile(allocator: std.mem.Allocator, r: *std.Io.Reader, classfile: *Class) !void {
+pub fn readClassFile(allocator: std.mem.Allocator, r: *std.Io.Reader, classfile: *Class) !void {
     classfile.magic = try r.takeInt(u32, .big);
     if (classfile.magic != format.class_format_header) return error.WrongMagic;
     classfile.minor_version = try r.takeInt(u16, .big);
@@ -49,21 +49,30 @@ fn readMethodOrField(r: *std.Io.Reader, classfile: *Class, comptime mode: enum {
         .method => break :t (Class.MethodInfo),
     }
 } {
+    const T: type = comptime switch (mode) {
+        .field => (Class.FieldInfo),
+        .method => (Class.MethodInfo),
+    };
     const flags = try r.takeInt(u16, .big);
     const name_index = try r.takeInt(u16, .big);
     const desc_index = try r.takeInt(u16, .big);
     const attr_len = try r.takeInt(u16, .big);
-    std.debug.print("flags={}, name={}, desc={}, attrs={}\n", .{ flags, name_index, desc_index, attr_len });
-    std.debug.print("Field '{s}' has {} attrs\n", .{ classfile.constant_pool.items[name_index - 1].utf_8_info.bytes, attr_len });
-    for (0..attr_len) |_| {
-        _ = try readAttr(r, classfile);
-    }
-    return .{
+    var ret: T = .{
         .access_flags = @bitCast(flags),
         .descriptor_index = desc_index,
         .name_index = name_index,
         .attributes = &[0]Class.Attribute{ },
     };
+    std.debug.print("static={}, name={}, desc={}, attrs={}\n", .{ ret.access_flags.static, name_index, desc_index, attr_len });
+    switch (mode) {
+        .field => std.debug.print("Field ", .{}),
+        .method => std.debug.print("Method ", .{})
+    }
+    std.debug.print("'{s}' has {} attrs\n", .{ classfile.constant_pool.items[name_index - 1].utf_8_info.bytes, attr_len });
+    for (0..attr_len) |_| {
+        _ = try readAttr(r, classfile);
+    }
+    return ret;
 }
 
 fn readAttr(r: *std.Io.Reader, classfile: *Class) !Class.Attribute {
@@ -74,11 +83,57 @@ fn readAttr(r: *std.Io.Reader, classfile: *Class) !Class.Attribute {
         name,
         len
     });
-    const bytes= try r.take(len);
+    var attr: Class.Attribute = .{
+        .attribute_name_index = name_index,
+        .attribute_length = len,
+        .info = .undefined
+    };
     if (std.mem.eql(u8, name, "Code")) {
-        try @import("bytecode.zig").print(bytes, classfile);
+        const max_stack = try r.takeInt(u16, .big);
+        const max_locals = try r.takeInt(u16, .big);
+        const code_len = try r.takeInt(u32, .big);
+        const bytecode = try r.take(code_len);
+        const exception_table_len = try r.takeInt(u16, .big);
+        r.toss(8 * exception_table_len);
+        const attr_count = try r.takeInt(u16, .big);
+        var attrs_len: usize = 0;
+        for (0..attr_count) |_| {
+            const a = try readAttr(r, classfile);
+            attrs_len += 6; // their name and length fields... oops.
+            attrs_len += a.attribute_length;
+        }
+        // Should be
+        // u2 max_stack +
+        // u2 max_locals +
+        // u4 code_len +
+        // u1[] code +
+        // u2 exc_len +
+        // u8[] exc_table +
+        // u2 attrs_count +
+        // attr[] attrs
+        const discovered_len = 12 + code_len + (exception_table_len * 8) + attrs_len;
+        if (discovered_len != len) {
+            std.debug.print("code_len={},ex_tabl_len={},attr_count={},attr_len={},total_guess={}\nneeded {}\n", .{
+                code_len, exception_table_len, attr_count, attrs_len, discovered_len, len
+            });
+            unreachable;
+        }
+        const print_bytecode = false;
+        if (print_bytecode) {
+            std.debug.print("Disassembled bytecode;\n", .{});
+            try @import("bytecode.zig").print(bytecode, classfile);
+        }
+        attr.info = .{ .code = .{
+            .max_locals = max_locals,
+            .max_stack = max_stack,
+            .code = bytecode,
+            .attributes = &.{},
+            .exception_table = &.{},
+        } };
+    } else {
+        _ = try r.take(len);
     }
-    return .{ .attribute_length = len, .attribute_name_index = name_index, .info = .undefined };
+    return  attr;
 }
 
 fn readConstant(gpa: std.mem.Allocator, r: *std.Io.Reader) !Class.Constant {
@@ -140,6 +195,22 @@ fn readConstant(gpa: std.mem.Allocator, r: *std.Io.Reader) !Class.Constant {
         .package => _ = try r.takeInt(u16, .big)
     }
     return .placeholder;
+}
+
+pub fn readClass(gpa: std.mem.Allocator, path: []const u8) !Class {
+    const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+    defer file.close();
+    var buf: [2048]u8 = undefined;
+    var reader = file.reader(&buf);
+    const r = &reader.interface;
+    var class = Class{
+        .constant_pool = try std.ArrayList(Class.Constant).initCapacity(gpa, 64),
+        .fields = try std.ArrayList(Class.FieldInfo).initCapacity(gpa, 16),
+        .methods = try std.ArrayList(Class.MethodInfo).initCapacity(gpa, 16),
+        .attributes = try std.ArrayList(Class.Attribute).initCapacity(gpa, 2),
+    };
+    try readClassFile(gpa, r, &class);
+    return class;
 }
 
 test "read" {
