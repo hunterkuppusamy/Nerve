@@ -1,7 +1,7 @@
 const std = @import("std");
 const Class = @import("format.zig").Class;
 
-pub fn writeClass(w: *std.Io.Writer, class: Class) !void {
+pub fn writeClass(w: *std.Io.Writer, class: *Class) !void {
     try w.writeInt(u32, class.magic, .big);
     try w.writeInt(u16, class.minor_version, .big);
     try w.writeInt(u16, class.major_version, .big);
@@ -29,10 +29,10 @@ pub fn writeClass(w: *std.Io.Writer, class: Class) !void {
 
     std.debug.print("writeClassFile: Number of attributes {d}\n", .{class.attributes.items.len});
     try w.writeInt(u16, @intCast(class.attributes.items.len), .big);
-    for (class.attributes.items) |attr| try writeAttribute(w, attr);
+    for (class.attributes.items) |attr| try writeAttribute(w, &attr);
 }
 
-fn writeMethodOrField(w: *std.Io.Writer, comptime mode: enum { field, method }, m: switch (mode) { .field => Class.FieldInfo, .method => Class.MethodInfo }, ) !void {
+fn writeMethodOrField(w: *std.Io.Writer, comptime mode: enum { field, method }, m: switch (mode) { .field => Class.FieldInfo, .method => Class.MethodInfo }) !void {
     std.debug.print("writeMethodOrField: Emitting {s}.\n", .{ @typeName(@TypeOf(m)) });
     const acc_flags: u16 = @bitCast(m.access_flags);
     std.debug.print("writeMethodOrField: Access Flags: {b:0>16}\n", .{ acc_flags });
@@ -41,10 +41,10 @@ fn writeMethodOrField(w: *std.Io.Writer, comptime mode: enum { field, method }, 
     try w.writeInt(u16, m.descriptor_index, .big);
     std.debug.print("writeMethodOrField: Number of attributes {any}\n", .{m.attributes.len});
     try w.writeInt(u16, @intCast(m.attributes.len), .big);
-    for (m.attributes) |attribute| try writeAttribute(w, attribute);
+    for (m.attributes) |attribute| try writeAttribute(w, &attribute);
 }
 
-fn writeAttribute(w: *std.Io.Writer, a: Class.Attribute) !void {
+fn writeAttribute(w: *std.Io.Writer, a: *const Class.Attribute) !void {
     std.debug.print("writeAttribute: Name_ndx = {d}\n", .{a.attribute_name_index});
     try w.writeInt(u16, a.attribute_name_index, .big);
     try w.writeInt(u32, a.attribute_length, .big);
@@ -64,7 +64,7 @@ fn writeAttribute(w: *std.Io.Writer, a: Class.Attribute) !void {
                 try w.writeInt(u16, e.catch_type, .big);
             }
             try w.writeInt(u16, @intCast(code.attributes.len), .big);
-            for (code.attributes) |attribute| try writeAttribute(w, attribute);
+            for (code.attributes) |attribute| try writeAttribute(w, &attribute);
         },
         else => {
             std.debug.print("Unhandled attribute {any}.\n", .{ a });
@@ -142,4 +142,14 @@ fn writeConstant(w: *std.Io.Writer, c: Class.Constant) !void {
         },
         .placeholder => {}
     }
+}
+
+pub fn writeClassToFile(path: []const u8, class: *Class) !void {
+    var buf: [2048]u8 = undefined;
+    var file = try std.fs.cwd().createFile(path, .{.lock = .exclusive,});
+    defer file.close();
+    var fs = file.writer(&buf);
+    var w = &fs.interface;
+    try @import("write.zig").writeClass(w, class);
+    try w.flush();
 }

@@ -1,7 +1,11 @@
 const std = @import("std");
 const lexer = @import("tokenizer.zig");
 const parser = @import("parser.zig");
+const gen = @import("jvm/gen.zig");
+const Node = @import("AST.zig").Node;
 const terminal = @import("util").terminal;
+const write = @import("jvm/write.zig");
+const Type = @import("type.zig").Type;
 
 pub const INTEGER = i32;
 pub const U_INTEGER = u32;
@@ -17,6 +21,43 @@ test {
     _ = @import("jvm/format.zig");
     _ = @import("jvm/read.zig");
     _ = @import("jvm/write.zig");
+}
+
+test "full" {
+    const source =
+        \\const var String = [import]("java/lang/String")
+        \\const var System = [import]("java/lang/System")
+        \\pub const var MyType = type {
+        \\  var int = 1
+        \\  var main = fn(args: String)->void {
+        \\      var this = MyType();
+        \\      System.out.println("hello");
+        \\  }
+        \\  var fifteen = fn(int:Int)->Int = int + 15
+        \\}
+        ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var tokenizer = lexer.Tokenizer.init(gpa, source);
+    const tokens = try tokenizer.tokenize();
+    var tokenParser = parser.Parser.init(gpa, tokens, source);
+    const file = try tokenParser.parse();
+    const file_owner = Node.VarDecl {
+        .loc = .{ .line = 0, .src_start_ndx = 0, .src_end_ndx = 0 },
+        .mods = .{ .constant = true, .public = true },
+        .name = "file_name",
+        .scope = .file,
+        .type = null,
+        .value = file
+    };
+    var program_context = gen.ProgramContext {
+        .allocator = gpa,
+        .types = std.StringHashMap(Type).init(gpa),
+    };
+    var class = try gen.generate(&program_context, file_owner);
+    try write.writeClassToFile("test/Main.class", &class);
 }
 
 pub const std_options = std.Options {

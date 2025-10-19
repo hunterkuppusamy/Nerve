@@ -5,16 +5,28 @@ const root = @import("root");
 const Type = @import("type.zig").Type;
 
 /// Just use arena for all allocations...
+///
+/// ```
+/// var const String = [import]("java/lang/String");
+/// var pub const MyType = type {
+///     var int = 1;
+///     var main = fn(args: String)->void {
+///
+///     };
+///     var fifteen = fn(int:Int)->Int = int + 15;
+/// };
+/// ```
 pub const Node = union(enum) {
+    type_decl: TypeDecl,
+    field_access: FieldAccess,
     fn_decl: FnDecl,
     fn_invoke: FnInvoke,
     body: Body,
     @"return": ?*Node,
 
-    namespace: Namespace,
     binary_op: BinaryOp,
     unary_op: UnaryOp,
-    @"var": Var,
+    @"var": VarDecl,
     @"if": If,
 
     // literals
@@ -30,7 +42,7 @@ pub const Node = union(enum) {
         loc: LineInfo,
         data: f32
     },
-    char: struct {
+    byte: struct {
         loc: LineInfo,
         data: u8
     },
@@ -43,19 +55,45 @@ pub const Node = union(enum) {
         data: []const u8,
     },
 
-    pub const Namespace = struct {
-        loc: LineInfo,
-        data: []const []const u8,
+    pub fn lineinfo(self: *Node) LineInfo {
+        return switch (self.*) {
+            .type_decl => |n| n.loc,
+            .field_access => |n| n.loc,
+            .fn_decl => |n| n.loc,
+            .fn_invoke => |n| n.loc,
+            .body => |n| n.loc,
+            .@"return" => |n| (n orelse return LineInfo{}).lineinfo(),
+            .binary_op => |n| n.loc,
+            .unary_op => |n| n.loc,
+            .@"var" => |n| n.loc,
+            .@"if" => |n| n.loc,
+            .integer => |n| n.loc,
+            .float => |n| n.loc,
+            .u_integer => |n| n.loc,
+            .byte => |n| n.loc,
+            .bool => |n| n.loc,
+            .string => |n| n.loc,
+        };
+    }
 
-        pub fn fullName(self: *const @This(), alloc: std.mem.Allocator) ![]const u8 {
-            var buf = try std.ArrayList(u8).initCapacity(alloc, 32);
-            for (self.data, 0..) |p, i| {
-                try buf.appendSlice(alloc, p);
-                if (i < self.data.len - 1) try buf.append(alloc, '.');
-            }
-            return try buf.toOwnedSlice(alloc);
-        }
+    pub const TypeDecl = struct {
+        loc: LineInfo,
+        fields: []const Node,
     };
+    //
+    // pub const Namespace = struct {
+    //     loc: LineInfo,
+    //     data: []const []const u8,
+    //
+    //     pub fn fullName(self: *const @This(), alloc: std.mem.Allocator) ![]const u8 {
+    //         var buf = try std.ArrayList(u8).initCapacity(alloc, 32);
+    //         for (self.data, 0..) |p, i| {
+    //             try buf.appendSlice(alloc, p);
+    //             if (i < self.data.len - 1) try buf.append(alloc, '.');
+    //         }
+    //         return try buf.toOwnedSlice(alloc);
+    //     }
+    // };
 
     pub const If = struct {
         loc: LineInfo,
@@ -64,15 +102,21 @@ pub const Node = union(enum) {
         branch_false: ?*Node,
     };
 
-    pub const Var = struct {
+    pub const VarDecl = struct {
         loc: LineInfo,
+        scope: Scope,
         name: []const u8,
         mods: packed struct {
-            constant: bool = false,
+            public: bool,
+            constant: bool,
         },
         /// Null if type is to be inferred.
+        /// Can either be a declared variable or a type declared right here.
         type: ?*Node,
         value: *Node,
+
+        /// Local variables cannot be public.
+        pub const Scope = enum { file, type, local };
     };
 
     pub const UnaryOp = struct {
@@ -115,25 +159,30 @@ pub const Node = union(enum) {
 
     pub const Body = struct {
         loc: LineInfo,
-        nodes: []Node,
+        nodes: []const Node,
     };
 
+    /// If instance is null, the access is local.
+    pub const FieldAccess = struct {
+        loc: LineInfo,
+        builtin: bool,
+        instance: ?*Node,
+        name: []const u8,
+    };
+
+    // No idea what a null instance here would mean. Local function eventually probably.
     pub const FnInvoke = struct {
         loc: LineInfo,
         builtin: bool,
-        namespace: *Node,
+        instance: ?*Node,
+        name: []const u8,
         args: []Node,
     };
 
     pub const FnDecl = struct {
         loc: LineInfo,
-        mods: packed struct {
-            public: bool,
-            constant: bool,
-        },
-        name: []const u8,
         params: []const Param,
-        return_type: *Type,
+        return_type: *Node,
         body: *Node,
 
         pub const Param = struct {
@@ -144,10 +193,10 @@ pub const Node = union(enum) {
     };
 
     pub const LineInfo = struct {
-        src_start_ndx: usize,
-        src_end_ndx: usize,
+        src_start_ndx: usize = 0,
+        src_end_ndx: usize = 0,
         /// If multiple lines, use the first line of appearance
-        line: usize,
+        line: usize = 0,
     };
 
     fn printIndents(indents: isize) void {
@@ -158,7 +207,7 @@ pub const Node = union(enum) {
     }
 
     pub fn print(node: *const Node, indents: isize) void {
-        switch (node.value) {
+        switch (node.*) {
             .binary_op => {
                 node.binary_op.lhs.print(indents);
                 const o = switch (node.binary_op.op) {
@@ -213,14 +262,13 @@ pub const Node = union(enum) {
                 if (fun.mods.constant) {
                     std.debug.print("const ", .{});
                 }
-                std.debug.print("fn {s}(", .{fun.name.data.string.slice});
                 for (fun.params) |p| {
                     std.debug.print("{s}: ", .{p.name});
                     p.type.print(indents);
                 }
                 std.debug.print(") -> ", .{});
                 fun.return_type.print(indents);
-                if (fun.body != Node.body) {
+                if (fun.body.* != Node.body) {
                     std.debug.print(" = ", .{});
                     fun.body.print(indents);
                     return;
@@ -234,7 +282,7 @@ pub const Node = union(enum) {
             .@"return" => {
                 printIndents(indents);
                 std.debug.print("return ", .{});
-                node.@"return".print(indents);
+                (node.@"return" orelse return).print(indents);
             },
             .body => {
                 printIndents(indents);
@@ -273,19 +321,11 @@ pub const Node = union(enum) {
             },
             .fn_invoke => {
                 const f = node.fn_invoke;
-                f.namespace.print(indents);
-                std.debug.print("(", .{});
+                std.debug.print("{s}(", .{ f.name });
                 for (f.args) |a| {
                     a.print(indents);
                 }
                 std.debug.print(")", .{});
-            },
-            .namespace => {
-                for (node.namespace.data, 0..) |tok, i| {
-                    if (i + 1 >= node.namespace.data.len) {
-                        std.debug.print("{s}", .{tok});
-                    } else std.debug.print("{s}.", .{tok});
-                }
             },
             .float => std.debug.print("{any}", .{node.float}),
             .integer => std.debug.print("{any}", .{node.integer}),

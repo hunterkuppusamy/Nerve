@@ -2,6 +2,7 @@ const std = @import("std");
 const parser = @import("parser.zig");
 const Class = @import("jvm/format.zig").Class;
 const Node = @import("AST.zig").Node;
+const ProgramContext = @import("jvm/gen.zig").ProgramContext;
 
 pub const Type = union(enum) {
     int: Int32,
@@ -9,7 +10,6 @@ pub const Type = union(enum) {
     void: void,
     @"struct": Struct,
     @"fn": Fn,
-    @"extern": ExternType,
     array: Array,
 
     pub fn jvmName(self: *const Type, gpa: std.mem.Allocator) ![]const u8 {
@@ -19,7 +19,6 @@ pub const Type = union(enum) {
             .void => "V",
             .@"fn" => "Ljava/lang/Function;",
             .@"struct" => |str| try classToDesc(gpa, str.name),
-            .@"extern" => |ext| try classToDesc(gpa, ext.jvm_class),
             .array => |a| try makeArray(gpa, try a.elements.jvmName(gpa)),
         };
     }
@@ -40,52 +39,32 @@ pub const Type = union(enum) {
         new[new.len - 1] = ';';
         return new;
     }
-    
-    pub fn typeFromNamespace(alloc: std.mem.Allocator, ns: Node.Namespace) !Type {
-        std.debug.print("Getting type from namespace: ", .{});
-        const full_name = try ns.fullName(alloc);
-        if (std.mem.eql(u8, full_name, "int")) {
-            return Type.int;
-        } else if (std.mem.eql(u8, full_name, "float")) {
-            return Type.float;
-        }
-        if (full_name[0] == '(') {
-            @panic("function types not supported.");
-        }
-        return Type{
-            .@"extern" = .{
-                .jvm_class = full_name,
-            }
-        };
-    }
 
     pub fn lookup(name: []const u8) ?Type {
         _ = name;
         return null;
     }
 
-    pub fn ofClass(gpa: std.mem.Allocator, class: *Class) !Type {
+    pub fn ofClass(program: *ProgramContext, class: Class) !*Type {
         const name = class.constant_pool.items[class.this_class - 1].utf_8_info.bytes;
-        const fields = try std.ArrayList(Struct.Field).initCapacity(gpa, 16);
+        var fields = try std.ArrayList(Struct.Field).initCapacity(program.allocator, 16);
+        try program.types.put(name, Type {
+            .@"struct" = .{
+                .name = try program.allocator.dupe(u8, name),
+                .fields = try fields.toOwnedSlice(program.allocator),
+            }
+        });
+        const type_ptr = program.types.getPtr(name).?;
         for (class.fields.items) |f| {
             const fname = class.constant_pool.items[f.name_index - 1].utf_8_info.bytes;
-            try fields.append(gpa, .{
+            const field_type_ptr = program.types.getPtr(class.constant_pool.items[f.descriptor_index - 1].utf_8_info.bytes).?;
+            try fields.append(program.allocator, .{
                 .access = f.access_flags,
-                .name = try gpa.dupe(u8, fname),
-                .type = Type {
-                    .@"extern" = .{
-                        // TODO parse descriptor
-                        .jvm_class = f.descriptor_index,
-                    }
-                }
+                .name = try program.allocator.dupe(u8, fname),
+                .type = field_type_ptr,
             });
         }
-        return Type {
-            .@"struct" = .{
-                .name = try gpa.dupe(u8, name),
-                .fields = 0,
-            }
-        };
+        return type_ptr;
     }
 
     pub const Struct = struct {
@@ -93,12 +72,18 @@ pub const Type = union(enum) {
         // fields are functions
         fields: []const Field,
 
+        const Self = @This();
         pub const Field = struct {
             access: Class.FieldAccessFlags,
 
             name: []const u8,
             type: *const Type,
         };
+
+        pub fn fieldByName(self: *const Self, name: []const u8) ?Field {
+            for (self.fields) |f| if (std.mem.eql(u8, f.name, name)) return f;
+            return null;
+        }
     };
 
     // Annotated as '()->void' or '(int32)->java/lang/Object'

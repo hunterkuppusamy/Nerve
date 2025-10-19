@@ -68,6 +68,7 @@ pub const TokenKind = enum(u8) {
 
     keyword_fn, // declare function
     keyword_var, // declare variable
+    keyword_type, // declare type
 
     keyword_if,
     keyword_elif,

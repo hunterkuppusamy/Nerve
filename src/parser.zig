@@ -47,18 +47,23 @@ pub const Parser = struct {
             return token;
         } else {
             self.diagnostics.err = .{ .error_type = Error.UnexpectedToken, .data = .{ .u = @intFromEnum(kind) } };
-            return Error.UnexpectedToken;
+            return error.UnexpectedToken;
         }
     }
 
     pub fn parse(self: *Parser) !*Node {
         self._i = 0;
 
-        const ret = body(self) catch |e| {
+        const ret = type_decl(self, true) catch |e| {
             switch (e) {
-                Error.UnexpectedToken => try generalUnexpectedToken(self),
-                Error.ExpectedStartOfStatement => try iWantedThingHere(self, "start of statement"),
-                else => {},
+                error.UnexpectedToken => try generalUnexpectedToken(self),
+                error.ExpectedStartOfStatement => try iWantedThingHere(self, "start of statement"),
+                else => {
+                    const diags = self.diagnostics.err;
+                    if (diags != null) {
+                        std.debug.print("Parsing error ({s}): {s}", .{ @errorName(diags.?.error_type), diags.?.error_message.? });
+                    }
+                },
             }
             return e;
         };
@@ -85,6 +90,10 @@ pub const Parser = struct {
 };
 
 fn generalUnexpectedToken(self: *Parser) !void {
+    if (self.diagnostics.err == null) {
+        try iWantedThingHere(self, "The correct token.");
+        return;
+    }
     const kind = @as(TokenKind, @enumFromInt(self.diagnostics.err.?.data.?.u));
     try iWantedThingHere(self, @tagName(kind));
 }
@@ -131,46 +140,61 @@ fn writeSource(source: []const u8, line_start: usize) !void {
     try w.writeByte('\n');
 }
 
+/// The first function invoked for parsing.
+fn type_decl(self: *Parser, is_root: bool) !Node {
+    if (!is_root and try self.peek() == .close_brace)
+        return Node { .type_decl = .{ .loc = LineInfo{}, .fields = &.{} } };
+
+    var decls = try std.ArrayList(Node).initCapacity(self.allocator, 4);
+    var decl = try declaration(self);
+    const first = decl.lineinfo();
+    try decls.append(self.allocator, decl);
+
+    while (self._i + 1 < self.tokens.len) {
+        if (!is_root and try self.peek() == .close_brace) break;
+        decl = try declaration(self);
+        try decls.append(self.allocator, decl);
+    }
+
+    return Node {
+        .type_decl = .{
+            .loc = .{
+                .line = first.line,
+                .src_start_ndx = first.src_start_ndx,
+                .src_end_ndx = decl.lineinfo().src_end_ndx,
+            },
+            .fields = try decls.toOwnedSlice(self.allocator)
+        }
+    };
+}
+
+/// Parses declarations (fields) inside a type.
+fn declaration(self: *Parser) !Node {
+    std.debug.print("parsing declaration\n", .{});
+    const p = try self.peek();
+    switch (p) {
+        .keyword_const,
+        .keyword_pub,
+        .keyword_var => {
+            return try variable(self, .file);
+        },
+        else => {
+            std.debug.print("Unhandled declaration token {s}.\n", .{ @tagName(p) });
+            return error.UnexpectedToken;
+        }
+    }
+}
+
+/// Parses statements inside a function.
 fn statement(self: *Parser) !Node {
     std.debug.print("parsing statement\n", .{});
     const p = try self.peek();
     switch (p) {
-        .keyword_const, .keyword_pub, .keyword_fn => {
-            return function(self);
+        .keyword_const, .keyword_var => {
+            return try variable(self, .local);
         },
-        .keyword_var => {
-            const var_token = try self.consume(.keyword_var);
-            var constant = false;
-            switch (try self.peek()) {
-                .keyword_const => {
-                    _ = try self.consume(.keyword_const);
-                    constant = true;
-                },
-                else => {},
-            }
-            const name = try self.consume(.identifier);
-            var typ: ?*Node = null;
-            if (try self.peek() == .colon) {
-                _ = try self.consume(.colon);
-                typ = try self.doAlloc(namespace);
-            }
-            _ = try self.consume(.equals);
-            const e = try self.doAlloc(expression);
-            return .{ .@"var" = .{
-                .loc = LineInfo {
-                    .line = var_token.source_data.line,
-                    .src_start_ndx = var_token.source_data.index,
-                    .src_end_ndx = 0 -| -1
-                },
-                .mods = .{
-                    .constant = constant,
-                },
-                .name = try self.allocator.dupe(u8, name.data.string.slice),
-                .type = typ,
-                .value = e,
-            } };
-        },
-        .identifier, .open_bracket => return try object_invoke_or_field_access(self),
+        // Will parse as field / invocation
+        .identifier => return try expression(self),
         .keyword_return => {
             _ = try self.consume(.keyword_return);
             if (try self.peek() == .semicolon) {
@@ -191,7 +215,52 @@ fn statement(self: *Parser) !Node {
     unreachable;
 }
 
-fn object_invoke_or_field_access(self: *Parser) anyerror!Node {
+fn variable(self: *Parser, scope: Node.VarDecl.Scope) !Node {
+    var constant = false;
+    var public = false;
+    // Does not allow duplicate modifiers.
+    while (true) {
+        switch (try self.peek()) {
+            .keyword_const => {
+                if (constant) return error.UnexpectedToken;
+                _ = try self.consume(.keyword_const);
+                constant = true;
+            },
+            .keyword_pub => {
+                if (scope == .local or public) return error.UnexpectedToken;
+                _ = try self.consume(.keyword_pub);
+                public = true;
+            },
+            else => break,
+        }
+    }
+    const var_token = try self.consume(.keyword_var);
+    const name = try self.consume(.identifier);
+    var typ: ?*Node = null;
+    if (try self.peek() == .colon) {
+        _ = try self.consume(.colon);
+        typ = try self.doAlloc(expression);
+    }
+    _ = try self.consume(.equals);
+    const e = try self.doAlloc(expression);
+    return .{ .@"var" = .{
+        .loc = LineInfo {
+            .line = var_token.source_data.line,
+            .src_start_ndx = var_token.source_data.index,
+            .src_end_ndx = 0 -| -1
+        },
+        .mods = .{
+            .constant = constant,
+            .public = public,
+        },
+        .scope = scope,
+        .name = try self.allocator.dupe(u8, name.data.string.slice),
+        .type = typ,
+        .value = e,
+    } };
+}
+
+fn object_invoke_or_field_access(self: *Parser, instance: ?*Node) anyerror!Node {
     var builtin = false;
     var is_func = false;
     if (try self.peek() == .open_bracket) {
@@ -199,25 +268,43 @@ fn object_invoke_or_field_access(self: *Parser) anyerror!Node {
         is_func = true;
         _ = try self.consume(.open_bracket);
     }
-    const ns = try namespace(self);
+    const name = try self.consume(.identifier);
     if (builtin) _ = try self.consume(.close_bracket);
 
     if (try self.peek() == .open_paren) is_func = true;
 
-    if (!is_func) return ns;
+    if (!is_func and builtin) {
+        self.diagnostics.err = .{
+            .error_message = "Builtin cannot be field.",
+            .error_type = error.IllegalExpression,
+        };
+        return error.IllegalExpression;
+    } else if (!is_func) return Node {
+        .field_access = .{
+            .loc = Node.LineInfo {
+                .line = name.source_data.line,
+                .src_start_ndx = name.source_data.index,
+                .src_end_ndx = name.source_data.index + name.data.string.slice.len,
+            },
+            .builtin = false,
+            .instance = instance,
+            .name = name.data.string.slice,
+        }
+    };
 
     _ = try self.consume(.open_paren);
     const args = try arguments(self);
     const closing = try self.consume(.close_paren);
     return .{
         .fn_invoke = .{
-            .loc = LineInfo{
-                .line = ns.namespace.loc.line,
-                .src_start_ndx = ns.namespace.loc.src_start_ndx,
-                .src_end_ndx = closing.source_data.index + 1
+            .loc = Node.LineInfo {
+                .line = name.source_data.line,
+                .src_start_ndx = name.source_data.index,
+                .src_end_ndx = closing.source_data.index,
             },
             .builtin = builtin,
-            .namespace = try self.alloc(ns),
+            .instance = instance,
+            .name = name.data.string.slice,
             .args = args,
         }
     };
@@ -326,11 +413,18 @@ fn factor(self: *Parser) !Node {
                 .rhs = node
             } };
         },
-        .identifier, .open_bracket => return try object_invoke_or_field_access(self),
+        .keyword_fn => return try function_decl(self),
+        .identifier, .open_bracket => return try object_invoke_or_field_access(self, null),
+        .keyword_type => {
+            _ = try self.consume(.keyword_type);
+            _ = try self.consume(.open_brace);
+            defer _ = self.consume(.close_brace) catch unreachable;
+            return try type_decl(self, false);
+        },
         // idk
         else => {
             std.log.err("Unhandled factor kind {s}\n", .{@tagName(kind)});
-            @panic("");
+            return Parser.Error.UnexpectedToken;
         },
     }
 }
@@ -354,31 +448,10 @@ fn arguments(self: *Parser) ![]Node {
     return try args.toOwnedSlice(self.allocator);
 }
 
-fn function(self: *Parser) !Node {
+fn function_decl(self: *Parser) !Node {
     std.debug.print("parsing function\n", .{});
-    var public = false;
-    var constant = false;
-
-    switch (try self.peek()) {
-        .keyword_const => {
-            if (constant) return error.UnexpectedConstModifier;
-            constant = true;
-            _ = try self.consume(.keyword_const);
-        },
-        .keyword_pub => {
-            if (public) return error.UnexpectedPubModifier;
-            public = true;
-            _ = try self.consume(.keyword_pub);
-        },
-        .keyword_fn => {},
-        else => return error.UnexpectedToken,
-    }
-
     // assert fn
     const keyword = try self.consume(.keyword_fn);
-
-    // read name
-    const name = try self.consume(.identifier);
 
     // read params
     _ = try self.consume(.open_paren);
@@ -402,7 +475,7 @@ fn function(self: *Parser) !Node {
 
     //read return type
     _ = try self.consume(.right_arrow);
-    const rtype_ns = try self.doAlloc(namespace);
+    const rtype = try self.doAlloc(expression);
 
     var body_node: *Node = undefined;
     // handle expr body
@@ -416,27 +489,15 @@ fn function(self: *Parser) !Node {
         _ = try self.consume(.close_brace);
     }
 
-    const rtype = try Type.typeFromNamespace(self.allocator, rtype_ns.namespace);
-
-    std.debug.print("Returned function '{s}'\n", .{name.data.string.slice});
+    std.debug.print("Returned function\n", .{});
     return .{ .fn_decl = .{
         .loc = LineInfo {
             .line = keyword.source_data.line,
             .src_start_ndx = keyword.source_data.index,
             .src_end_ndx = 0,
         },
-        .name = name.data.string.slice,
-        .mods = .{
-            .public = public,
-            .constant = constant,
-        },
         .params = params,
-        .return_type = reType: {
-
-            const ptr = try self.allocator.create(Type);
-            ptr.* = rtype;
-            break :reType ptr;
-        },
+        .return_type = rtype,
         .body = body_node
     } };
 }
@@ -455,6 +516,7 @@ fn body(self: *Parser) !Node {
 
     var statements = try std.ArrayList(Node).initCapacity(self.allocator, 4);
     var s = try statement(self);
+    const first = s.lineinfo();
     try statements.append(self.allocator, s);
 
     while (self._i + 1 < self.tokens.len) {
@@ -469,52 +531,23 @@ fn body(self: *Parser) !Node {
 
     return .{ .body = .{
         .loc = LineInfo {
-            .line = 0,
-            .src_start_ndx = 0,
-            .src_end_ndx = 0
+            .line = first.line,
+            .src_start_ndx = first.src_start_ndx,
+            .src_end_ndx = s.lineinfo().src_end_ndx,
         },
         .nodes = try statements.toOwnedSlice(self.allocator)
-    } };
-}
-
-/// Gathers all consecutive identifiers delimited by periods.
-fn namespace(self: *Parser) !Node {
-    std.debug.print("parsing namespace\n", .{});
-    var ns = try std.ArrayList([] const u8).initCapacity(self.allocator, 4);
-
-    const first = try self.consume(.identifier);
-    try ns.append(self.allocator, first.data.string.slice);
-
-    while (try self.peek() == .period) {
-        _ = try self.consume(.period);
-        const i = try self.consume(.identifier);
-        try ns.append(self.allocator, i.data.string.slice);
-    }
-
-    const tokens = try ns.toOwnedSlice(self.allocator);
-    var length: usize = 0;
-    for (tokens) |str| {
-        length = length + str.len;
-    }
-    return .{ .namespace = .{
-        .loc = LineInfo {
-            .line = first.source_data.line,
-            .src_start_ndx = first.source_data.index,
-            .src_end_ndx = first.source_data.index + length
-        },
-        .data = tokens
     } };
 }
 
 fn parameter(self: *Parser) !Node.FnDecl.Param {
     const name = try self.consume(.identifier);
     _ = try self.consume(.colon);
-    const typ = try self.doAlloc(namespace);
+    const typ = try self.doAlloc(expression);
     return .{
         .loc = LineInfo {
             .line = name.source_data.line,
             .src_start_ndx = name.source_data.index,
-            .src_end_ndx = typ.namespace.loc.src_end_ndx,
+            .src_end_ndx = typ.lineinfo().src_end_ndx,
         },
         .name = try self.allocator.dupe(u8, name.data.string.slice),
         .type = typ,
@@ -528,6 +561,13 @@ fn term(self: *Parser) !Node {
     };
 
     while (true) {
+        peeked = try self.peek();
+        if (peeked == .period) {
+            _ = try self.consume(.period);
+            node = try object_invoke_or_field_access(self, try self.alloc(node));
+            continue;
+        }
+
         const op_kind: Node.BinaryOp.Op = switch (peeked) {
             .operator_mul => .mul,
             .operator_div => .div,
@@ -548,8 +588,6 @@ fn term(self: *Parser) !Node {
             .op = op_kind,
             .rhs = rhs,
         } };
-
-        peeked = try self.peek();
     }
 
     return node;
@@ -561,6 +599,7 @@ fn expression(self: *Parser) anyerror!Node {
     var peeked = self.peek() catch |e| {
         if (e == Parser.Error.UnexpectedEndOfFile) return node else return e;
     };
+    if (peeked == .keyword_fn) return try function_decl(self);
 
     while (true) {
         const op_kind: Node.BinaryOp.Op = switch (peeked) {
@@ -608,7 +647,7 @@ test "const var" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     const alloc = arena.allocator();
     defer arena.deinit();
-    const node = try lexAndParse(alloc, "var const test = 1.0 * 2 + (3 - 4);");
+    const node = try lexAndParse(alloc, "const var test = 1.0 * 2 + (3 - 4)");
 
     const root_node = node.body.nodes[0];
     try expect(root_node == Node.@"var");
@@ -641,18 +680,21 @@ test "parse function expression" {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const node = try lexAndParse(alloc, "pub fn start() -> int = 1;");
+    const node = try lexAndParse(alloc, "pub var start = fn()->int = 1;");
 
     const fnode = node.body.nodes[0];
 
-    try expect(fnode == Node.fn_decl);
-    const func = fnode.fn_decl;
-    try expect(std.mem.eql(u8, func.name, "start"));
-    try expect(func.params.len == 0);
-    const return_type_name = @tagName(func.return_type.*);
+    try expect(fnode == Node.@"var");
+    const var_decl = fnode.@"var";
+    try expect(std.mem.eql(u8, var_decl.name, "start"));
+    try expect(var_decl.value.* == Node.fn_decl);
+    const fun = var_decl.value.fn_decl;
+    try expect(fun.params.len == 0);
+    const return_type_name = @tagName(fun.return_type.*);
+    std.debug.print("return type = '{s}'\n", .{ return_type_name });
     try expect(std.mem.eql(u8, return_type_name, "int"));
-    // there isnt even a body in this situation; The expression is directly parsed into that slot.
-    const return_value = func.body.integer.data;
+    // No body, the function just contains the literal integer. That is the implicit return value.
+    const return_value = fun.body.integer.data;
     try expect(return_value == 1);
 }
 
@@ -661,19 +703,21 @@ test "parse function body" {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const node = try lexAndParse(alloc, "pub fn start() -> int { return SUCCESS; }");
+    const node = try lexAndParse(alloc, "pub var start = fn()->int { return SUCCESS; }");
 
     const fnode = node.body.nodes[0];
 
-    try expect(fnode == Node.fn_decl);
-    const func = fnode.fn_decl;
-    try expect(std.mem.eql(u8, func.name, "start"));
-    try expect(func.params.len == 0);
-    const return_type_name = @tagName(func.return_type.*);
+    try expect(fnode == Node.@"var");
+    const var_decl = fnode.@"var";
+    try expect(std.mem.eql(u8, var_decl.name, "start"));
+    try expect(var_decl.value.* == Node.fn_decl);
+    const fun = var_decl.value.fn_decl;
+    try expect(fun.params.len == 0);
+    const return_type_name = @tagName(fun.return_type.*);
     std.debug.print("return type = '{s}'\n", .{ return_type_name });
     try expect(std.mem.eql(u8, return_type_name, "int"));
-    const return_statement = func.body.body.nodes[0];
+    const return_statement = fun.body.body.nodes[0];
     try expect(return_statement == Node.@"return");
-    const return_var_name = return_statement.@"return".?.namespace.data[0];
+    const return_var_name = return_statement.@"return".?.field_access.name;
     try expect(std.mem.eql(u8, return_var_name, "SUCCESS"));
 }

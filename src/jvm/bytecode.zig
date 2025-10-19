@@ -4,10 +4,12 @@ const ConstantPool = @import("../ConstantPool.zig");
 const Type = @import("../type.zig").Type;
 const format = @import("format.zig");
 const Op = format.Op;
+const gen = @import("gen.zig");
 const Code = Op.Code;
 const Node = @import("../AST.zig").Node;
 const Class = format.Class;
 const read = @import("read.zig");
+const ProgramContext = @import("gen.zig").ProgramContext;
 
 pub const CodeContext = struct {
     allocator: std.mem.Allocator,
@@ -143,64 +145,91 @@ pub const CodeContext = struct {
         }
     }
 
-    pub fn create(context: *CodeContext, body: []const Node) !void {
+    pub fn create(code: *CodeContext, program: *ProgramContext, body: []const Node) !void {
         std.debug.print("createCode: Creating code for {any} nodes.\n", .{ body.len });
         for (body) |node| {
-            try createCode0(context, node);
+            try createCode0(program, code, node);
         }
     }
 };
 
-fn inferType(context: *CodeContext, node: Node) !Type {
-    switch (node) {
+pub fn inferType(program: *ProgramContext, code: *CodeContext, node: *const Node) !Type {
+    switch (node.*) {
         .@"var" => |n| {
-            if (n.type) |ret| return try inferType(context, ret.*);
+            if (n.type) |ret| return try inferType(program, code, ret);
         },
         .integer => return Type.int,
         .float => return Type.float,
         .fn_decl => |n| {
-            var nodes: []Node = undefined;
+            var nodes: []const Node = undefined;
             if (n.body.* == Node.body) { nodes = n.body.body.nodes; } else {
-                nodes = try context.allocator.alloc(Node, 1);
-                nodes[0] = n.body.*;
+                const var_nodes = try code.allocator.alloc(Node, 1);
+                var_nodes[0] = n.body.*;
+                nodes = var_nodes;
             }
-            var params = try std.ArrayList(Type.Fn.Param).initCapacity(context.allocator, 2);
+            var params = try std.ArrayList(Type.Fn.Param).initCapacity(code.allocator, 2);
             for (n.params) |p| {
-                const type_ptr = try context.allocator.create(Type);
-                type_ptr.* = try Type.typeFromNamespace(context.allocator, p.type.namespace);
-                try params.append(context.allocator, Type.Fn.Param {
+                const type_ptr = try code.allocator.create(Type);
+                type_ptr.* = try inferType(program, code, p.type);
+                try params.append(code.allocator, Type.Fn.Param {
                     .name = p.name,
                     .type = type_ptr
                 });
             }
+            const rtype = try code.allocator.create(Type);
+            rtype.* = try inferType(program, code, n.return_type);
             return Type {
                 .@"fn" = .{
-                    .body = try context.allocator.dupe(Node, nodes),
-                    .params = try params.toOwnedSlice(context.allocator),
-                    .return_type = n.return_type,
+                    .body = try code.allocator.dupe(Node, nodes),
+                    .params = try params.toOwnedSlice(code.allocator),
+                    .return_type = rtype,
                 }
             };
         },
         .fn_invoke => |n| {
             if (n.builtin) {
-                const ns = n.namespace.namespace.data;
-                const name = ns[ns.len - 1];
-                if (std.mem.eql(u8, name, "import")) return Type {
-                    .@"extern" = .{
-                        .jvm_class = n.args[0].string.data
-                    }
+                const name = n.name;
+                if (std.mem.eql(u8, name, "import")) {
+                    const path = n.args[0].string.data;
+                    const class = try read.readClass(program.allocator, path);
+                    const imported = try Type.ofClass(program, class);
+                    const ret = imported.*;
+                    program.allocator.destroy(imported);
+                    return ret;
                 } else if (std.mem.eql(u8, name, "asm")) {
-                    return switch (context.stack.peek() orelse return Type.void) {
+                    return switch (code.stack.peek() orelse return Type.void) {
                         .int => Type.int,
                         .float => Type.float,
                         else => error.CannotInferType,
                     };
                 }
+                std.debug.print("Unknown builtin '{s}'.\n", .{ name });
+                return error.CannotInferType;
+            }
+            const instance = n.instance;
+            if (instance) |this| {
+                const this_type = (try inferType(program, code, this)).@"struct";
+                for (this_type.fields) |f| {
+                    if (std.mem.eql(u8, f.name, n.name)) return f.type.@"fn".return_type.*;
+                }
+                std.debug.print("Could not find field '{s}' in type '{s}'.\n", .{ n.name, this_type.name });
+                return error.CannotInferType;
+            } else {
+                return code.getLocal(n.name).?.type;
             }
         },
-        .namespace => |n| {
-            const data = n.data;
-            if (data.len == 1) return context.getLocal(data[0]).?.type;
+        .field_access => |n| {
+            const instance = n.instance;
+            if (instance) |this| {
+                const this_type = (try inferType(program, code, this)).@"struct";
+                for (this_type.fields) |f| {
+                    if (std.mem.eql(u8, f.name, n.name)) return f.type.*;
+                }
+                std.debug.print("Could not find field '{s}' in type '{s}'.\n", .{ n.name, this_type.name });
+                return error.CannotInferType;
+            } else {
+                return code.getLocal(n.name).?.type;
+            }
         },
         else => {}
     }
@@ -208,70 +237,91 @@ fn inferType(context: *CodeContext, node: Node) !Type {
     return error.CannotInferType;
 }
 
-fn createCode0(context: *CodeContext, node: Node) !void {
+fn createCode0(program: *ProgramContext, code: *CodeContext, node: Node) !void {
     std.debug.print("createCode0: Creating {s}\n", .{ @tagName(node) });
     switch (node) {
         .@"var" => |n| {
             std.debug.print("Varname = '{s}'\n", .{ n.name });
-            try createCode0(context, n.value.*);
-            const this = try context.getOrCreateLocal(n.name, try inferType(context, n.value.*));
+            try createCode0(program, code, n.value.*);
+            const this = try code.getOrCreateLocal(n.name, try inferType(program, code, n.value));
             switch (this.type) {
-                .int => try context.writeOp(Op.Code.ISTORE, this.index),
-                .float => try context.writeOp(Op.Code.FSTORE, this.index),
-                else => try context.writeOp(Op.Code.ASTORE, this.index),
+                .int => try code.writeOp(Op.Code.ISTORE, this.index),
+                .float => try code.writeOp(Op.Code.FSTORE, this.index),
+                else => try code.writeOp(Op.Code.ASTORE, this.index),
             }
         },
         .integer => |n| {
             const i = n.data;
             const abs = std.math.sign(i) * i;
             if (abs <= std.math.maxInt(i8)) {
-                try context.writeOp(Op.Code.BIPUSH, n.data);
+                try code.writeOp(Op.Code.BIPUSH, n.data);
             } else if (abs <= std.math.maxInt(i16)) {
-                try context.writeOp(Op.Code.SIPUSH, n.data);
+                try code.writeOp(Op.Code.SIPUSH, n.data);
             } else {
-                const h = try context.cpool.add_integer(n.data);
-                try context.pushConstant(h);
+                const h = try code.cpool.add_integer(n.data);
+                try code.pushConstant(h);
             }
-            try context.stack.push(.int);
+            try code.stack.push(.int);
         },
-        .namespace => |n| {
-            const name = try n.fullName(context.allocator);
-            const local = context.getLocal(name);
-            if (local) |l| {
-                try context.loadLocal(l);
+        .field_access => |n| {
+            const name = n.name;
+            if (n.instance) |instance| {
+                const inferred_type = try inferType(program, code, instance);
+                try createCode0(program, code, instance.*);
+                var return_type: ?*const Type = null;
+                for (inferred_type.@"struct".fields) |f| {
+                    if (std.mem.eql(u8, f.name, name)) return_type = f.type;
+                }
+                if (return_type == null) return error.FieldNotFound;
+                const field_ref = try code.cpool.add_field_ref(try inferred_type.jvmName(code.allocator), name, try return_type.?.jvmName(code.allocator));
+                try code.writeOp(Op.Code.GETFIELD, field_ref);
             } else {
-                std.debug.print("Unknown variable '{s}'.\n", .{ name });
-                return error.UnknownVariable;
+                const local = code.getLocal(name);
+                if (local) |l| {
+                    try code.loadLocal(l);
+                } else {
+                    std.debug.print("Unknown variable '{s}'.\n", .{ name });
+                    return error.UnknownVariable;
+                }
             }
         },
         .@"return" => |n| {
             if (n == null) {
-                try context.writeOp(Op.Code.RETURN, 0);
+                try code.writeOp(Op.Code.RETURN, 0);
                 return;
             }
-            try createCode0(context, n.?.*);
-            switch (context.stack.peek() orelse return error.NothingToReturn) {
-                .int => try context.writeOp(Op.Code.IRETURN, 0),
-                .float => try context.writeOp(Op.Code.FRETURN, 0),
-                else => try context.writeOp(Op.Code.ARETURN, 0),
+            try createCode0(program, code, n.?.*);
+            switch (code.stack.peek() orelse return error.NothingToReturn) {
+                .int => try code.writeOp(Op.Code.IRETURN, 0),
+                .float => try code.writeOp(Op.Code.FRETURN, 0),
+                else => try code.writeOp(Op.Code.ARETURN, 0),
             }
         },
         .fn_invoke => |n| {
-            // if ns[0] is local, do field access until method and invoke
-            // otherwise ns[0] is a class ref, then same as above
-            const full = n.namespace.namespace.data;
-            // assert full is at least len 1 from the parser.
-            const name = full[full.len - 1];
-            const prior = full[1..full.len];
+            const name = n.name;
+            const args = n.args;
+            if (n.builtin) return try createBuiltin(program, code, name, args);
+            if (n.instance) |instance| {
+                const inferred_type = try inferType(program, code, instance);
+                var return_type: ?*const Type = null;
+                for (inferred_type.@"struct".fields) |f| {
+                    if (std.mem.eql(u8, f.name, name)) return_type = f.type;
+                }
+                if (return_type == null) return error.FieldNotFound;
+                const method_ref = try code.cpool.add_method_ref(
+                    try inferred_type.jvmName(code.allocator),
+                    name,
+                    try createMethodDesc(program, code, args, return_type.?)
+                );
+                // Pushes instance 'objectref' on the stack
+                try createCode0(program, code, instance.*);
+                for (args) |a| {
+                    // Pushes args on the stack
+                    try createCode0(program, code, a);
+                }
+                try code.writeOp(Op.Code.INVOKEVIRTUAL, method_ref);
+            } else {
 
-            if (n.builtin) return try createBuiltin(context, name, n.args);
-
-            if (prior.len == 0) return error.UnexpectedFunction;
-
-            const local = context.getLocal(prior[0]) orelse return error.UnexpectedFunction;
-            try context.loadLocal(local);
-            for (prior[1..]) |field| {
-                try createFieldAccess(context, field, undefined);
             }
         },
         else => {
@@ -281,20 +331,29 @@ fn createCode0(context: *CodeContext, node: Node) !void {
     }
 }
 
-fn createBuiltin(context: *CodeContext, name: []const u8, args: []Node) !void {
+fn createMethodDesc(program: *ProgramContext, code: *CodeContext, args: []const Node, ret: *const Type) ![]const u8 {
+    const params = try program.allocator.alloc([]const u8, args.len);
+    for (args, 0..) |a, i| {
+        const typ = try inferType(program, code, &a);
+        const name = try typ.jvmName(program.allocator);
+        params[i] = name;
+    }
+    return try gen.assembleMethodDesc(program, params, try ret.jvmName(program.allocator));
+}
+
+fn createBuiltin(program: *ProgramContext, context: *CodeContext, name: []const u8, args: []Node) !void {
     if (std.mem.eql(u8, name, "import")) {
         const class = args[0].string.data;
         const class_h = try context.cpool.add_class(class);
         try context.pushConstant(class_h);
         var split = std.mem.splitScalar(u8, class, ':');
         const mode = split.next() orelse "undefined";
-        var import: Type = undefined;
+        var import: *Type = undefined;
         if (std.mem.eql(u8, mode, "jvm")) {
-            import = try read.readClass(context.allocator, split.rest());
+            import = try Type.ofClass(program, try read.readClass(context.allocator, split.rest()));
         } else {
-            import = Type.lookup().?;
+            import = program.types.getPtr(class).?;
         }
-        try context.imported.put(class_h, import);
     } else if (std.mem.eql(u8, name, "asm")) {
         const codes = @typeInfo(Op.Code).@"enum".fields;
         const getCode = struct {
@@ -312,7 +371,7 @@ fn createBuiltin(context: *CodeContext, name: []const u8, args: []Node) !void {
                     code = getCode(str.data);
                 },
                 .integer => |i| try context.writeOp(code, i.data),
-                .char => |c| try context.writeOp(code, c.data),
+                .byte => |c| try context.writeOp(code, c.data),
                 else => return error.UnexpectedType,
             }
         }
