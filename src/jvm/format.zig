@@ -8,7 +8,7 @@ pub const Class = struct {
     magic: u32 = class_format_header,
     minor_version: u16 = 0,
     major_version: u16 = 52,
-    constant_pool: std.ArrayList(Constant) = undefined,
+    constant_pool: []const Constant = undefined,
     access_flags: ClassAccessFlags = .{
         .public = true,
     },
@@ -16,9 +16,9 @@ pub const Class = struct {
     super_class: u16 = 0,
     /// Array of indices of interfaces this class inherits
     interfaces: []const u16 = &[0]u16{},
-    fields: std.ArrayList(FieldInfo) = undefined,
-    methods: std.ArrayList(MethodInfo) = undefined,
-    attributes: std.ArrayList(Attribute) = undefined,
+    fields: []FieldInfo = undefined,
+    methods: []MethodInfo = undefined,
+    attributes: []Attribute = undefined,
 
     pub const FieldAccessFlags = packed struct {
         public: bool = false,
@@ -664,6 +664,8 @@ pub const Op = struct {
         RETURN = 0xb1,
         IRETURN = 0xac,
         FRETURN = 0xae,
+        LRETURN = 173,
+        DRETURN = 175,
         ARETURN = 0xb0,
         INVOKEVIRTUAL = 0xb6,
         INVOKESPECIAL = 0xb7,
@@ -769,6 +771,8 @@ pub const Op = struct {
             .RETURN => .{ .mnemonic = "return", .operand_form = .none, .stack_pop = 0, .stack_push = 0 },
             .IRETURN => .{ .mnemonic = "ireturn", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
             .FRETURN => .{ .mnemonic = "freturn", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
+            .LRETURN => .{ .mnemonic = "lreturn", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
+            .DRETURN => .{ .mnemonic = "dreturn", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
             .ARETURN => .{ .mnemonic = "areturn", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
             .INVOKEVIRTUAL => .{ .mnemonic = "invokevirtual", .operand_form = .U16_constant, .stack_pop = -1, .stack_push = -1 }, // pop: objectref + args, push: return value
             .INVOKESPECIAL => .{ .mnemonic = "invokespecial", .operand_form = .U16_constant, .stack_pop = -1, .stack_push = -1 },

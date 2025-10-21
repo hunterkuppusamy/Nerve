@@ -2,25 +2,33 @@ const std = @import("std");
 const format = @import("format.zig");
 const Class = format.Class;
 
-pub fn readClassFile(allocator: std.mem.Allocator, r: *std.Io.Reader, classfile: *Class) !void {
-    classfile.magic = try r.takeInt(u32, .big);
-    if (classfile.magic != format.class_format_header) return error.WrongMagic;
-    classfile.minor_version = try r.takeInt(u16, .big);
-    classfile.major_version = try r.takeInt(u16, .big);
+pub fn readClass(gpa: std.mem.Allocator, r: *std.Io.Reader, class: *Class) !void {
+
+    var constants = try std.ArrayList(Class.Constant).initCapacity(gpa, 16);
+    var fields = try std.ArrayList(Class.FieldInfo).initCapacity(gpa, 16);
+    var methods = try std.ArrayList(Class.MethodInfo).initCapacity(gpa, 1);
+    var attributes = try std.ArrayList(Class.Attribute).initCapacity(gpa, 6);
+
+    class.magic = try r.takeInt(u32, .big);
+    if (class.magic != format.class_format_header) return error.WrongMagic;
+    class.minor_version = try r.takeInt(u16, .big);
+    class.major_version = try r.takeInt(u16, .big);
     for (1..try r.takeInt(u16, .big)) |_| {
-        const c = try readConstant(allocator, r);
+        const c = try readConstant(gpa, r);
         std.debug.print("Read constant {s}\n", .{ @tagName(c) });
-        try classfile.constant_pool.append(allocator, c);
+        try constants.append(gpa, c);
         switch (c) {
-            .long_info, .double_info => try classfile.constant_pool.append(allocator, .placeholder),
+            .long_info, .double_info => try constants.append(gpa, .placeholder),
             else => {}
         }
     }
-    classfile.access_flags = @bitCast(try r.takeInt(u16, .big));
-    classfile.this_class = try r.takeInt(u16, .big);
-    classfile.super_class = try r.takeInt(u16, .big);
-    const this_name = classfile.constant_pool.items[classfile.this_class - 1].class_info.name_index;
-    std.debug.print("this = '{s}'\n", .{ classfile.constant_pool.items[this_name - 1].utf_8_info.bytes });
+    class.constant_pool = try constants.toOwnedSlice(gpa);
+
+    class.access_flags = @bitCast(try r.takeInt(u16, .big));
+    class.this_class = try r.takeInt(u16, .big);
+    class.super_class = try r.takeInt(u16, .big);
+    const this_name = constants.items[class.this_class - 1].class_info.name_index;
+    std.debug.print("this = '{s}'\n", .{ constants.items[this_name - 1].utf_8_info.bytes });
     const interfaces_len = try r.takeInt(u16, .big);
     std.debug.print("# of Interfaces = {}\n", .{ interfaces_len });
     if (interfaces_len > 0) for (1..interfaces_len) |_| {
@@ -29,18 +37,22 @@ pub fn readClassFile(allocator: std.mem.Allocator, r: *std.Io.Reader, classfile:
     const fields_len = try r.takeInt(u16, .big) ;
     std.debug.print("# of fields = {}\n", .{ fields_len });
     for (0..fields_len) |_| {
-        try classfile.fields.append(allocator, try readMethodOrField(r, classfile, .field));
+        try fields.append(gpa, try readMethodOrField(r, class, .field));
     }
     const methods_len = try r.takeInt(u16, .big);
     std.debug.print("# of methods = {}\n", .{ methods_len });
     for (0..methods_len) |_| {
-        try classfile.methods.append(allocator, try readMethodOrField(r, classfile, .method));
+        try methods.append(gpa, try readMethodOrField(r, class, .method));
     }
     const attrs_len = try r.takeInt(u16, .big);
     std.debug.print("# of attrs = {}\n", .{ attrs_len });
     for (0..attrs_len) |_| {
-        try classfile.attributes.append(allocator, try readAttr(r, classfile));
+        try attributes.append(gpa, try readAttr(r, class));
     }
+
+    class.fields = try fields.toOwnedSlice(gpa);
+    class.methods = try methods.toOwnedSlice(gpa);
+    class.attributes = try attributes.toOwnedSlice(gpa);
 }
 
 fn readMethodOrField(r: *std.Io.Reader, classfile: *Class, comptime mode: enum { field, method }) !t: {
@@ -68,17 +80,17 @@ fn readMethodOrField(r: *std.Io.Reader, classfile: *Class, comptime mode: enum {
         .field => std.debug.print("Field ", .{}),
         .method => std.debug.print("Method ", .{})
     }
-    std.debug.print("'{s}' has {} attrs\n", .{ classfile.constant_pool.items[name_index - 1].utf_8_info.bytes, attr_len });
+    std.debug.print("'{s}' has {} attrs\n", .{ classfile.constant_pool[name_index - 1].utf_8_info.bytes, attr_len });
     for (0..attr_len) |_| {
         _ = try readAttr(r, classfile);
     }
     return ret;
 }
 
-fn readAttr(r: *std.Io.Reader, classfile: *Class) !Class.Attribute {
+fn readAttr(r: *std.Io.Reader, class: *Class) !Class.Attribute {
     const name_index = try r.takeInt(u16, .big);
     const len = try r.takeInt(u32, .big);
-    const name = classfile.constant_pool.items[name_index - 1].utf_8_info.bytes;
+    const name = class.constant_pool[name_index - 1].utf_8_info.bytes;
     std.debug.print("Reading attr '{s}', len = {}\n", .{
         name,
         len
@@ -98,7 +110,7 @@ fn readAttr(r: *std.Io.Reader, classfile: *Class) !Class.Attribute {
         const attr_count = try r.takeInt(u16, .big);
         var attrs_len: usize = 0;
         for (0..attr_count) |_| {
-            const a = try readAttr(r, classfile);
+            const a = try readAttr(r, class);
             attrs_len += 6; // their name and length fields... oops.
             attrs_len += a.attribute_length;
         }
@@ -121,7 +133,7 @@ fn readAttr(r: *std.Io.Reader, classfile: *Class) !Class.Attribute {
         const print_bytecode = false;
         if (print_bytecode) {
             std.debug.print("Disassembled bytecode;\n", .{});
-            try @import("bytecode.zig").print(bytecode, classfile);
+            try @import("bytecode.zig").print(bytecode, class);
         }
         attr.info = .{ .code = .{
             .max_locals = max_locals,
@@ -197,19 +209,14 @@ fn readConstant(gpa: std.mem.Allocator, r: *std.Io.Reader) !Class.Constant {
     return .placeholder;
 }
 
-pub fn readClass(gpa: std.mem.Allocator, path: []const u8) !Class {
+pub fn readClassFile(gpa: std.mem.Allocator, path: []const u8) !Class {
     const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
     defer file.close();
     var buf: [2048]u8 = undefined;
     var reader = file.reader(&buf);
     const r = &reader.interface;
-    var class = Class{
-        .constant_pool = try std.ArrayList(Class.Constant).initCapacity(gpa, 64),
-        .fields = try std.ArrayList(Class.FieldInfo).initCapacity(gpa, 16),
-        .methods = try std.ArrayList(Class.MethodInfo).initCapacity(gpa, 16),
-        .attributes = try std.ArrayList(Class.Attribute).initCapacity(gpa, 2),
-    };
-    try readClassFile(gpa, r, &class);
+    var class = Class{};
+    try readClass(gpa, r, &class);
     return class;
 }
 
@@ -218,16 +225,6 @@ test "read" {
     const gpa = arena.allocator();
     defer arena.deinit();
 
-    const file = try std.fs.cwd().openFile("test/ToRead.class", .{ .mode = .read_only });
-    defer file.close();
-    var buf: [2048]u8 = undefined;
-    var reader = file.reader(&buf);
-    const r = &reader.interface;
-    var class = Class{
-        .constant_pool = try std.ArrayList(Class.Constant).initCapacity(gpa, 16),
-        .fields = try std.ArrayList(Class.FieldInfo).initCapacity(gpa, 16),
-        .methods = try std.ArrayList(Class.MethodInfo).initCapacity(gpa, 16),
-        .attributes = try std.ArrayList(Class.Attribute).initCapacity(gpa, 16),
-    };
-    try readClassFile(gpa, r, &class);
+    const class = try readClassFile(gpa, "test/ToRead.class");
+    _ = class;
 }

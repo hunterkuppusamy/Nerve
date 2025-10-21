@@ -44,20 +44,28 @@ test "full" {
     const tokens = try tokenizer.tokenize();
     var tokenParser = parser.Parser.init(gpa, tokens, source);
     const file = try tokenParser.parse();
-    const file_owner = Node.VarDecl {
-        .loc = .{ .line = 0, .src_start_ndx = 0, .src_end_ndx = 0 },
-        .mods = .{ .constant = true, .public = true },
-        .name = "file_name",
-        .scope = .file,
-        .type = null,
-        .value = file
+    const file_owner = Node {
+        .@"var" = .{
+            .loc = .{ .line = 0, .src_start_ndx = 0, .src_end_ndx = 0 },
+            .mods = .{ .constant = true, .public = true },
+            .name = "file_name",
+            .scope = .file,
+            .type = null,
+            .value = file
+        }
     };
-    var program_context = gen.ProgramContext {
-        .allocator = gpa,
-        .types = std.StringHashMap(Type).init(gpa),
-    };
-    var class = try gen.generate(&program_context, file_owner);
-    try write.writeClassToFile("test/Main.class", &class);
+    var context = try gen.CodegenContext.init(gpa);
+    const generated = try context.inferType(&file_owner);
+    switch (generated.*) {
+        .@"struct" => |*str| {
+            try gen.generate(&context, str);
+            try write.writeClassFile("test/Main.class", context.class);
+        },
+        else => {
+            std.debug.print("Cannot generate a class file for a type that is not a struct.\n", .{});
+            return error.CannotGenerateClassOfNonStructType;
+        }
+    }
 }
 
 pub const std_options = std.Options {

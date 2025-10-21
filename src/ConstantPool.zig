@@ -5,10 +5,10 @@ const ConstantPool = @This();
 
 allocator: std.mem.Allocator,
 
-/// We will fill the `constant_pool` field of your ClassFile instance.
-class: *Class,
+/// To populate before populating the Class instance.
+constant_list: std.ArrayList(Class.Constant),
 
-// HashMaps to dedupe; keys refer to *handles* (usize), or raw values.
+// HashMaps to dedupe; keys refer to *handles* (usize).
 utf8_map: std.StringHashMap(usize),
 /// UTF index to Class index
 class_map: std.AutoHashMap(usize, usize),
@@ -22,23 +22,21 @@ long_map: std.AutoHashMap(i64, usize),
 float_map: std.AutoHashMap(u32, usize),
 double_map: std.AutoHashMap(u64, usize),
 
-pub fn init(allocator: std.mem.Allocator, cf: *Class) !ConstantPool {
+pub fn init(gpa: std.mem.Allocator) !ConstantPool {
     const cp = ConstantPool {
-        .allocator = allocator,
-        .class = cf,
-        .utf8_map = std.StringHashMap(usize).init(allocator),
-        .class_map = std.AutoHashMap(usize, usize).init(allocator),
-        .name_and_type_map = std.AutoHashMap(u128, usize).init(allocator),
-        .method_ref_map = std.AutoHashMap(u64, usize).init(allocator),
-        .field_ref_map = std.AutoHashMap(u64, usize).init(allocator),
-        .string_map = std.AutoHashMap(usize, usize).init(allocator),
-        .integer_map = std.AutoHashMap(i32, usize).init(allocator),
-        .long_map = std.AutoHashMap(i64, usize).init(allocator),
-        .float_map = std.AutoHashMap(u32, usize).init(allocator),
-        .double_map = std.AutoHashMap(u64, usize).init(allocator),
+        .allocator = gpa,
+        .constant_list = try std.ArrayList(Class.Constant).initCapacity(gpa, 32),
+        .utf8_map = std.StringHashMap(usize).init(gpa),
+        .class_map = std.AutoHashMap(usize, usize).init(gpa),
+        .name_and_type_map = std.AutoHashMap(u128, usize).init(gpa),
+        .method_ref_map = std.AutoHashMap(u64, usize).init(gpa),
+        .field_ref_map = std.AutoHashMap(u64, usize).init(gpa),
+        .string_map = std.AutoHashMap(usize, usize).init(gpa),
+        .integer_map = std.AutoHashMap(i32, usize).init(gpa),
+        .long_map = std.AutoHashMap(i64, usize).init(gpa),
+        .float_map = std.AutoHashMap(u32, usize).init(gpa),
+        .double_map = std.AutoHashMap(u64, usize).init(gpa),
     };
-    // initialize the classfile constant_pool list
-    cf.constant_pool = try std.ArrayList(Class.Constant).initCapacity(allocator, 32);
     return cp;
 }
 
@@ -53,7 +51,7 @@ pub fn deinit(self: *ConstantPool) void {
     _ = self.float_map.deinit();
     _ = self.long_map.deinit();
     _ = self.double_map.deinit();
-    _ = self.class.constant_pool.deinit();
+    _ = self.constant_list.constant_pool.deinit();
 }
 
 /// internal helper: append a constant and mark wide-ness.
@@ -62,12 +60,10 @@ fn appendConst(self: *ConstantPool, c: Class.Constant) !usize {
         std.debug.print("Adding const '{s}'\n", .{c.utf_8_info.bytes});
     } else std.debug.print("Adding const {any}\n", .{c});
 
-    const idx = self.class.constant_pool.items.len;
-    try self.class.constant_pool.append(self.allocator, c);
+    const idx = self.constant_list.items.len;
+    try self.constant_list.append(self.allocator, c);
     switch (c) {
-        .long_info, .double_info => {
-            try self.class.constant_pool.append(self.allocator, .placeholder);
-        },
+        .long_info, .double_info => try self.constant_list.append(self.allocator, .placeholder),
         else => {}
     }
     return idx + 1;
@@ -87,8 +83,8 @@ pub fn add_class(self: *ConstantPool, internal_name: []const u8) !usize {
     const name_h = try self.add_utf8(internal_name);
     if (self.class_map.get(name_h)) |h| return h;
     const c = Class.Constant{ .class_info = .{
-        .name_index = @intCast(name_h), // but careful: name_index in constant is *jvm index*, maybe store handle now and fix later
-        }};
+        .name_index = @intCast(name_h)
+    } };
     const idx = try self.appendConst(c);
     try self.class_map.put(name_h, idx);
     return idx;
@@ -191,9 +187,12 @@ pub fn add_double(self: *ConstantPool, double: f64) !usize {
     return idx;
 }
 
-pub fn validate(self: *ConstantPool) void {
-    const cp_count = self.class.constant_pool.items.len + 1;
+pub fn populate(self: *ConstantPool, class: *Class) !void {
+    const cp_count = self.constant_list.items.len + 1;
     if (cp_count > 0xFFFF) @panic("constant_pool_count > 65535");
+    const owned = try self.constant_list.toOwnedSlice(self.allocator);
+    defer self.constant_list.deinit(self.allocator);
+    class.constant_pool = owned;
 }
 
 const expect = std.testing.expect;
@@ -204,7 +203,7 @@ test "Constant Pool" {
     defer arena.deinit();
 
     var classfile = Class{};
-    var pool = try ConstantPool.init(alloc, &classfile);
+    var pool = try ConstantPool.init(alloc);
     _ = try pool.add_double(1.0);
     _ = try pool.add_float(2.0);
     _ = try pool.add_string("Hello");

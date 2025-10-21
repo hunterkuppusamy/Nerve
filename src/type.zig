@@ -5,18 +5,26 @@ const Node = @import("AST.zig").Node;
 const ProgramContext = @import("jvm/gen.zig").ProgramContext;
 
 pub const Type = union(enum) {
-    int: Int32,
-    float: Float32,
-    void: void,
+    // Primitives with no meta-data.
+    int,
+    float,
+    long,
+    double,
+    void,
+
     @"struct": Struct,
     @"fn": Fn,
+    /// Not currently parsable, but exists to implement `Main.main([]String args){}`
     array: Array,
 
     pub fn jvmName(self: *const Type, gpa: std.mem.Allocator) ![]const u8 {
         return switch (self.*) {
             .int => "I",
             .float => "F",
+            .long => "J",
+            .double => "D",
             .void => "V",
+
             .@"fn" => "Ljava/lang/Function;",
             .@"struct" => |str| try classToDesc(gpa, str.name),
             .array => |a| try makeArray(gpa, try a.elements.jvmName(gpa)),
@@ -31,40 +39,13 @@ pub const Type = union(enum) {
         return new;
     }
 
-    fn classToDesc(gpa: std.mem.Allocator, bytes: []const u8) ![]const u8 {
-        const len = bytes.len;
+    fn classToDesc(gpa: std.mem.Allocator, path: []const u8) ![]const u8 {
+        const len = path.len;
         const new = try gpa.alloc(u8, len + 2);
-        @memcpy(new[1..(new.len - 1)], bytes);
+        @memcpy(new[1..(new.len - 1)], path);
         new[0] = 'L';
         new[new.len - 1] = ';';
         return new;
-    }
-
-    pub fn lookup(name: []const u8) ?Type {
-        _ = name;
-        return null;
-    }
-
-    pub fn ofClass(program: *ProgramContext, class: Class) !*Type {
-        const name = class.constant_pool.items[class.this_class - 1].utf_8_info.bytes;
-        var fields = try std.ArrayList(Struct.Field).initCapacity(program.allocator, 16);
-        try program.types.put(name, Type {
-            .@"struct" = .{
-                .name = try program.allocator.dupe(u8, name),
-                .fields = try fields.toOwnedSlice(program.allocator),
-            }
-        });
-        const type_ptr = program.types.getPtr(name).?;
-        for (class.fields.items) |f| {
-            const fname = class.constant_pool.items[f.name_index - 1].utf_8_info.bytes;
-            const field_type_ptr = program.types.getPtr(class.constant_pool.items[f.descriptor_index - 1].utf_8_info.bytes).?;
-            try fields.append(program.allocator, .{
-                .access = f.access_flags,
-                .name = try program.allocator.dupe(u8, fname),
-                .type = field_type_ptr,
-            });
-        }
-        return type_ptr;
     }
 
     pub const Struct = struct {
@@ -112,8 +93,4 @@ pub const Type = union(enum) {
         name: []const u8,
         params: []const Fn.Param,
     };
-
-    // No data
-    pub const Int32 = void;
-    pub const Float32 = void;
 };

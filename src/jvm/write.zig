@@ -1,35 +1,35 @@
 const std = @import("std");
 const Class = @import("format.zig").Class;
 
-pub fn writeClass(w: *std.Io.Writer, class: *Class) !void {
+pub fn writeClass(w: *std.Io.Writer, class: *const Class) !void {
     try w.writeInt(u32, class.magic, .big);
     try w.writeInt(u16, class.minor_version, .big);
     try w.writeInt(u16, class.major_version, .big);
-    try w.writeInt(u16, @truncate(class.constant_pool.items.len + 1), .big);
-    for (class.constant_pool.items) |c| try writeConstant(w, c);
+    try w.writeInt(u16, @truncate(class.constant_pool.len + 1), .big);
+    for (class.constant_pool) |c| try writeConstant(w, c);
     const acc_flags: u16 = @bitCast(class.access_flags);
     std.debug.print("writeClassFile: Class Access Flags: {b:0>16}\n", .{acc_flags});
     try w.writeInt(u16, acc_flags, .big);
-    std.debug.print("writeClassFile: This class = {s}\n", .{class.constant_pool.items[class.constant_pool.items[class.this_class - 1].class_info.name_index - 1].utf_8_info.bytes});
+    std.debug.print("writeClassFile: This class = {s}\n", .{class.constant_pool[class.constant_pool[class.this_class - 1].class_info.name_index - 1].utf_8_info.bytes});
     try w.writeInt(u16, class.this_class, .big);
-    std.debug.print("writeClassFile: Super class = {s}\n", .{class.constant_pool.items[class.constant_pool.items[class.super_class - 1].class_info.name_index - 1].utf_8_info.bytes});
+    std.debug.print("writeClassFile: Super class = {s}\n", .{class.constant_pool[class.constant_pool[class.super_class - 1].class_info.name_index - 1].utf_8_info.bytes});
     try w.writeInt(u16, class.super_class, .big);
 
     std.debug.print("writeClassFile: Number of interfaces {d}\n", .{class.interfaces.len});
     try w.writeInt(u16, @intCast(class.interfaces.len), .big);
     for (class.interfaces) |interface| try w.writeInt(u16, interface, .big);
 
-    std.debug.print("writeClassFile: Number of fields {d}\n", .{class.fields.items.len});
-    try w.writeInt(u16, @truncate(class.fields.items.len), .big);
-    for (class.fields.items) |field| try writeMethodOrField(w, .field, field);
+    std.debug.print("writeClassFile: Number of fields {d}\n", .{class.fields.len});
+    try w.writeInt(u16, @truncate(class.fields.len), .big);
+    for (class.fields) |field| try writeMethodOrField(w, .field, field);
 
-    std.debug.print("writeClassFile: Number of methods {d}\n", .{class.methods.items.len});
-    try w.writeInt(u16, @intCast(class.methods.items.len), .big);
-    for (class.methods.items) |method| try writeMethodOrField(w, .method, method);
+    std.debug.print("writeClassFile: Number of methods {d}\n", .{class.methods.len});
+    try w.writeInt(u16, @intCast(class.methods.len), .big);
+    for (class.methods) |method| try writeMethodOrField(w, .method, method);
 
-    std.debug.print("writeClassFile: Number of attributes {d}\n", .{class.attributes.items.len});
-    try w.writeInt(u16, @intCast(class.attributes.items.len), .big);
-    for (class.attributes.items) |attr| try writeAttribute(w, &attr);
+    std.debug.print("writeClassFile: Number of attributes {d}\n", .{class.attributes.len});
+    try w.writeInt(u16, @intCast(class.attributes.len), .big);
+    for (class.attributes) |attr| try writeAttribute(w, &attr);
 }
 
 fn writeMethodOrField(w: *std.Io.Writer, comptime mode: enum { field, method }, m: switch (mode) { .field => Class.FieldInfo, .method => Class.MethodInfo }) !void {
@@ -144,7 +144,7 @@ fn writeConstant(w: *std.Io.Writer, c: Class.Constant) !void {
     }
 }
 
-pub fn writeClassToFile(path: []const u8, class: *Class) !void {
+pub fn writeClassFile(path: []const u8, class: *const Class) !void {
     var buf: [2048]u8 = undefined;
     var file = try std.fs.cwd().createFile(path, .{.lock = .exclusive,});
     defer file.close();
