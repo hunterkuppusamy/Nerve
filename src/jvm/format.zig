@@ -8,7 +8,7 @@ pub const Class = struct {
     magic: u32 = class_format_header,
     minor_version: u16 = 0,
     major_version: u16 = 52,
-    constant_pool: std.ArrayList(Constant) = undefined,
+    constant_pool: []const Constant = undefined,
     access_flags: ClassAccessFlags = .{
         .public = true,
     },
@@ -16,9 +16,9 @@ pub const Class = struct {
     super_class: u16 = 0,
     /// Array of indices of interfaces this class inherits
     interfaces: []const u16 = &[0]u16{},
-    fields: std.ArrayList(FieldInfo) = undefined,
-    methods: std.ArrayList(MethodInfo) = undefined,
-    attributes: std.ArrayList(Attribute) = undefined,
+    fields: []FieldInfo = undefined,
+    methods: []MethodInfo = undefined,
+    attributes: []Attribute = undefined,
 
     pub const FieldAccessFlags = packed struct {
         public: bool = false,
@@ -412,7 +412,7 @@ pub const Class = struct {
 
     pub const Constant = union(enum) {
         utf_8_info: struct {
-            tag: u8 = @intFromEnum(Tag.utf8),
+            pub const tag: u8 = @intFromEnum(Tag.utf8);
             /// Some special rules:
             /// - No byte may have the value of 0
             /// - No byte may be in the range 0xf0..0xff
@@ -421,59 +421,59 @@ pub const Class = struct {
             bytes: []const u8,
         },
         integer_info: struct {
-            tag: u8 = @intFromEnum(Tag.integer),
+            pub const tag: u8 = @intFromEnum(Tag.integer);
             /// big-endian
             bytes: u32,
         },
         float_info: struct {
-            tag: u8 = @intFromEnum(Tag.float),
+            pub const tag: u8 = @intFromEnum(Tag.float);
             /// IEEE 754 big-endian
             bytes: u32,
         },
         long_info: struct {
-            tag: u8 = @intFromEnum(Tag.long),
+            pub const tag: u8 = @intFromEnum(Tag.long);
             /// big-endian
             high_bytes: u32,
             /// big-endian
             low_bytes: u32,
         },
         double_info: struct {
-            tag: u8 = @intFromEnum(Tag.double),
+            pub const tag: u8 = @intFromEnum(Tag.double);
             /// big-endian
             high_bytes: u32,
             /// big-endian
             low_bytes: u32,
         },
         class_info: struct {
-            tag: u8 = @intFromEnum(Tag.class),
+            pub const tag: u8 = @intFromEnum(Tag.class);
             name_index: u16,
         },
         string_info: struct {
-            tag: u8 = @intFromEnum(Tag.string),
+            pub const tag: u8 = @intFromEnum(Tag.string);
             string_index: u16,
         },
         field_ref_info: struct {
-            tag: u8 = @intFromEnum(Tag.fieldref),
+            pub const tag: u8 = @intFromEnum(Tag.fieldref);
             class_index: u16,
             name_and_type_index: u16,
         },
         method_ref_info: struct {
-            tag: u8 = @intFromEnum(Tag.methodref),
+            pub const tag: u8 = @intFromEnum(Tag.methodref);
             class_index: u16,
             name_and_type_index: u16,
         },
         interface_ref_info: struct {
-            tag: u8 = @intFromEnum(Tag.interface_methodref),
+            pub const tag: u8 = @intFromEnum(Tag.interface_methodref);
             class_index: u16,
             name_and_type_index: u16,
         },
         name_and_type_info: struct {
-            tag: u8 = @intFromEnum(Tag.name_and_type),
+            pub const tag: u8 = @intFromEnum(Tag.name_and_type);
             name_index: u16,
             descriptor_index: u16,
         },
         method_handle_info: struct {
-            tag: u8 = @intFromEnum(Tag.method_handle),
+            pub const tag: u8 = @intFromEnum(Tag.method_handle);
             reference_kind: enum(u8) {
                 get_field = 1,
                 get_static = 2,
@@ -505,17 +505,17 @@ pub const Class = struct {
             reference_index: u16,
         },
         method_type_info: struct {
-            tag: u8 = @intFromEnum(Tag.method_type),
+            pub const tag: u8 = @intFromEnum(Tag.method_type);
             descriptor_index: u16,
         },
         invoke_dynamic: struct {
-            tag: u8 = @intFromEnum(Tag.invoke_dynamic),
+            pub const tag: u8 = @intFromEnum(Tag.invoke_dynamic);
             // Usually includes:
             // - bootstrap_method_attr_index: u16,
             // - name_and_type_index: u16,
         },
         /// Only exists to buffer after longs and doubles (which occupy two indices in the class file).
-        placeholder : void,
+        placeholder: void,
 
         pub const Tag = enum(u8) {
             utf8 = 1,
@@ -664,6 +664,8 @@ pub const Op = struct {
         RETURN = 0xb1,
         IRETURN = 0xac,
         FRETURN = 0xae,
+        LRETURN = 173,
+        DRETURN = 175,
         ARETURN = 0xb0,
         INVOKEVIRTUAL = 0xb6,
         INVOKESPECIAL = 0xb7,
@@ -769,6 +771,8 @@ pub const Op = struct {
             .RETURN => .{ .mnemonic = "return", .operand_form = .none, .stack_pop = 0, .stack_push = 0 },
             .IRETURN => .{ .mnemonic = "ireturn", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
             .FRETURN => .{ .mnemonic = "freturn", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
+            .LRETURN => .{ .mnemonic = "lreturn", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
+            .DRETURN => .{ .mnemonic = "dreturn", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
             .ARETURN => .{ .mnemonic = "areturn", .operand_form = .none, .stack_pop = 1, .stack_push = 0 },
             .INVOKEVIRTUAL => .{ .mnemonic = "invokevirtual", .operand_form = .U16_constant, .stack_pop = -1, .stack_push = -1 }, // pop: objectref + args, push: return value
             .INVOKESPECIAL => .{ .mnemonic = "invokespecial", .operand_form = .U16_constant, .stack_pop = -1, .stack_push = -1 },

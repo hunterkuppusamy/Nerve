@@ -22,6 +22,7 @@ pub const Node = union(enum) {
     fn_decl: FnDecl,
     fn_invoke: FnInvoke,
     body: Body,
+    array_of: ArrayOf,
     @"return": ?*Node,
 
     binary_op: BinaryOp,
@@ -73,6 +74,7 @@ pub const Node = union(enum) {
             .byte => |n| n.loc,
             .bool => |n| n.loc,
             .string => |n| n.loc,
+            .array_of => |n| n.loc,
         };
     }
 
@@ -80,6 +82,12 @@ pub const Node = union(enum) {
         loc: LineInfo,
         fields: []const Node,
     };
+
+    pub const ArrayOf = struct {
+        loc: LineInfo,
+        element_type: *Node,
+    };
+
     //
     // pub const Namespace = struct {
     //     loc: LineInfo,
@@ -109,6 +117,7 @@ pub const Node = union(enum) {
         mods: packed struct {
             public: bool,
             constant: bool,
+            static: bool,
         },
         /// Null if type is to be inferred.
         /// Can either be a declared variable or a type declared right here.

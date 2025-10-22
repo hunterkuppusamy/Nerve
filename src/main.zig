@@ -8,22 +8,13 @@ pub fn main() !void {
     const string = "Hello, World!";
     std.debug.print("The type of string '{s}' is '{s}'", .{ string, @typeName(@TypeOf(string)) });
     std.debug.print("Starting program.\n", .{});
-    try Nerve.compile(
-        \\// Comment!
-        \\pub fn start(y: int32)-> int32 {
-        \\  var const a = 1 / y;
-        \\  fn h(x: int32) -> int32 = x + 1;
-        \\  var b = h(a);
-        \\
-        \\  if (b < 1) {
-        \\      return y;
-        \\  } elif(b < 3) {
-        \\      return a;
-        \\  } else {
-        \\      return h(b) * 2;
-        \\  }
+    const source =
+        \\const var System = [import]("test/java/lang/System.class")
+        \\const var String = [import]("test/java/lang/String.class")
+        \\pub static const var main = fn(args: []String)->void {
+        \\  System.out.println("hellomayasworld");
+        \\  return;
         \\}
-        \\
-        \\fn new() -> none = 1;
-    );
+        ;
+    try Nerve.compile(source);
 }

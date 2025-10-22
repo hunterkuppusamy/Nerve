@@ -307,9 +307,13 @@ const Env = struct {
 pub const panic = std.debug.FullPanic(struct {
     pub fn panicFn(msg: []const u8, first_trace_addr: ?usize) noreturn {
         if (current_test) |ct| {
-            std.debug.print("\x1b[31m{s}\npanic running \"{s}\"\n{s}\x1b[0m\n", .{ BORDER, ct, BORDER });
+            Printer.border();
+            Printer.fmt("\npanic while running '{s}'.\n", .{ ct });
+            Printer.border();
         }
-        std.debug.defaultPanic(msg, first_trace_addr);
+        Printer.fmt("\n{s}\n", .{ msg });
+        std.debug.dumpCurrentStackTrace(first_trace_addr);
+        std.process.exit(1);
     }
 }.panicFn);
 

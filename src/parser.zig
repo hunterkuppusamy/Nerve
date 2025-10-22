@@ -175,6 +175,7 @@ fn declaration(self: *Parser) !Node {
     switch (p) {
         .keyword_const,
         .keyword_pub,
+        .keyword_static,
         .keyword_var => {
             return try variable(self, .file);
         },
@@ -218,6 +219,7 @@ fn statement(self: *Parser) !Node {
 fn variable(self: *Parser, scope: Node.VarDecl.Scope) !Node {
     var constant = false;
     var public = false;
+    var static = false;
     // Does not allow duplicate modifiers.
     while (true) {
         switch (try self.peek()) {
@@ -230,6 +232,11 @@ fn variable(self: *Parser, scope: Node.VarDecl.Scope) !Node {
                 if (scope == .local or public) return error.UnexpectedToken;
                 _ = try self.consume(.keyword_pub);
                 public = true;
+            },
+            .keyword_static => {
+                if (scope == .local or static) return error.UnexpectedToken;
+                _ = try self.consume(.keyword_static);
+                static = true;
             },
             else => break,
         }
@@ -252,6 +259,7 @@ fn variable(self: *Parser, scope: Node.VarDecl.Scope) !Node {
         .mods = .{
             .constant = constant,
             .public = public,
+            .static = static,
         },
         .scope = scope,
         .name = try self.allocator.dupe(u8, name.data.string.slice),
@@ -414,7 +422,24 @@ fn factor(self: *Parser) !Node {
             } };
         },
         .keyword_fn => return try function_decl(self),
-        .identifier, .open_bracket => return try object_invoke_or_field_access(self, null),
+        .identifier, .open_bracket => {
+            if (try self.seek(1) != .close_bracket)
+                return try object_invoke_or_field_access(self, null);
+
+            const open = try self.consume(.open_bracket);
+            _ = try self.consume(.close_bracket);
+            const expr = try self.doAlloc(expression);
+            return .{
+                .array_of = .{
+                    .loc = .{
+                        .line = open.source_data.line,
+                        .src_start_ndx = open.source_data.index,
+                        .src_end_ndx = expr.lineinfo().src_end_ndx,
+                    },
+                    .element_type = expr,
+                }
+            };
+        },
         .keyword_type => {
             _ = try self.consume(.keyword_type);
             _ = try self.consume(.open_brace);
@@ -625,6 +650,7 @@ fn expression(self: *Parser) anyerror!Node {
             .rhs = rhs,
         } };
 
+        if (self._i >= self.tokens.len) break;
         peeked = try self.peek();
     }
 
@@ -682,15 +708,15 @@ test "parse function expression" {
 
     const node = try lexAndParse(alloc, "pub var start = fn()->int = 1;");
 
-    const fnode = node.body.nodes[0];
-
-    try expect(fnode == Node.@"var");
-    const var_decl = fnode.@"var";
-    try expect(std.mem.eql(u8, var_decl.name, "start"));
-    try expect(var_decl.value.* == Node.fn_decl);
-    const fun = var_decl.value.fn_decl;
+    const root_node = node.type_decl;
+    const field = root_node.fields[0];
+    try expect(field == Node.@"var");
+    const decl = field.@"var";
+    try expect(std.mem.eql(u8, decl.name, "start"));
+    try expect(decl.value.* == Node.fn_decl);
+    const fun = decl.value.fn_decl;
     try expect(fun.params.len == 0);
-    const return_type_name = @tagName(fun.return_type.*);
+    const return_type_name = fun.return_type.*.field_access.name;
     std.debug.print("return type = '{s}'\n", .{ return_type_name });
     try expect(std.mem.eql(u8, return_type_name, "int"));
     // No body, the function just contains the literal integer. That is the implicit return value.
@@ -705,15 +731,15 @@ test "parse function body" {
 
     const node = try lexAndParse(alloc, "pub var start = fn()->int { return SUCCESS; }");
 
-    const fnode = node.body.nodes[0];
-
-    try expect(fnode == Node.@"var");
-    const var_decl = fnode.@"var";
-    try expect(std.mem.eql(u8, var_decl.name, "start"));
-    try expect(var_decl.value.* == Node.fn_decl);
-    const fun = var_decl.value.fn_decl;
+    const root_node = node.type_decl;
+    const field = root_node.fields[0];
+    try expect(field == Node.@"var");
+    const decl = field.@"var";
+    try expect(std.mem.eql(u8, decl.name, "start"));
+    try expect(decl.value.* == Node.fn_decl);
+    const fun = decl.value.fn_decl;
     try expect(fun.params.len == 0);
-    const return_type_name = @tagName(fun.return_type.*);
+    const return_type_name = fun.return_type.*.field_access.name;
     std.debug.print("return type = '{s}'\n", .{ return_type_name });
     try expect(std.mem.eql(u8, return_type_name, "int"));
     const return_statement = fun.body.body.nodes[0];
