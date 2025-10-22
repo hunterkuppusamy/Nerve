@@ -11,19 +11,34 @@ const Class = format.Class;
 const read = @import("read.zig");
 const Context = @import("gen.zig").CodegenContext;
 
-pub fn writeOpsFromNodes(context: *Context, nodes: []const Node) !void {
+pub fn bytecodeOf(context: *Context, nodes: []const Node) !void {
     for (nodes) |node| {
-        try writeOpsFromNode(context, node);
+        try bytecodeOf0(context, node);
     }
 }
 
-fn writeOpsFromNode(context: *Context, node: Node) !void {
+fn pushInt(context: *Context, comptime T: type, v: anytype) !void {
+    const i: T = std.math.cast(T, v).?;
+    const abs = std.math.sign(i) * i;
+    if (abs <= std.math.maxInt(i8)) {
+        try context.function.writeOp(Op.Code.BIPUSH, i);
+    } else if (abs <= std.math.maxInt(i16)) {
+        try context.function.writeOp(Op.Code.SIPUSH, i);
+    } else {
+        const h = try context.cpool.add_integer(i);
+        try context.function.pushConstant(h);
+    }
+    try context.function.op_stack.push(.int);
+}
+
+fn bytecodeOf0(context: *Context, node: Node) !void {
     const gpa = context.allocator;
-    std.debug.print("createCode0: Creating {s}\n", .{ @tagName(node) });
+    std.debug.print("writeOpsFromNode: Creating {s}\n", .{ @tagName(node) });
+    defer std.debug.print("writeOpsFromNode: stack = {}\n", .{ context.function.op_stack.list });
     switch (node) {
         .@"var" => |n| {
             std.debug.print("Varname = '{s}'\n", .{ n.name });
-            try writeOpsFromNode(context, n.value.*);
+            try bytecodeOf0(context, n.value.*);
             const this = try context.function.getOrCreateLocal(n.name, try context.inferType(n.value));
             switch (this.type.*) {
                 .int => try context.function.writeOp(Op.Code.ISTORE, this.index),
@@ -32,39 +47,38 @@ fn writeOpsFromNode(context: *Context, node: Node) !void {
             }
         },
         .integer => |n| {
-            const i = n.data;
-            const abs = std.math.sign(i) * i;
-            if (abs <= std.math.maxInt(i8)) {
-                try context.function.writeOp(Op.Code.BIPUSH, n.data);
-            } else if (abs <= std.math.maxInt(i16)) {
-                try context.function.writeOp(Op.Code.SIPUSH, n.data);
-            } else {
-                const h = try context.cpool.add_integer(n.data);
-                try context.function.pushConstant(h);
-            }
-            try context.function.op_stack.push(.int);
+            try pushInt(context, i32, n.data);
         },
         .field_access => |n| {
             const name = n.name;
+
             if (n.instance) |instance| {
-                const inferred_type = try context.inferType(instance);
-                try writeOpsFromNode(context, instance.*);
-                var return_type: ?*const Type = null;
-                for (inferred_type.@"struct".fields) |f| {
-                    if (std.mem.eql(u8, f.name, name)) return_type = f.type;
-                }
-                if (return_type == null) return error.FieldNotFound;
+                const inferred_type = (try context.inferType(instance)).@"struct";
+                try bytecodeOf0(context, instance.*);
+                const field = inferred_type.fieldByName(name) orelse return error.NoSuchField;
+                var return_type= field.type;
+
                 const field_ref = try context.cpool.add_field_ref(
-                    try inferred_type.jvmName(gpa),
+                    inferred_type.name,
                     name,
-                    try return_type.?.jvmName(gpa)
+                    try return_type.jvmName(gpa)
                 );
-                try context.function.writeOp(.GETFIELD, field_ref);
+
+                if (field.access.static) {
+                    try context.function.writeOp(.GETSTATIC, field_ref);
+                } else {
+                    try context.function.writeOp(.GETFIELD, field_ref);
+                }
+
+                try context.function.op_stack.push(.object);
             } else {
                 if (context.function.getLocal(name)) |l| {
                     try context.function.loadLocal(l);
-                } else if (context.static.getField(name)) |d| {
-                    try context.function.writeOp(.GETSTATIC, d.index);
+                    try context.function.op_stack.push(.object);
+                } else if (context.static.getStatic(name)) |_| {
+                    // const class = try context.cpool.add_field_ref(try d.type.jvmName(gpa), d.name, "()V");
+                    // try context.function.writeOp(.GETSTATIC, class);
+                    // try context.function.op_stack.push(.object);
                 } else {
                     std.debug.print("Unknown variable '{s}'.\n", .{ name });
                     return error.UnknownVariable;
@@ -77,7 +91,7 @@ fn writeOpsFromNode(context: *Context, node: Node) !void {
                 return;
             }
             // push the return value to the stack.
-            try writeOpsFromNode(context, n.?.*);
+            try bytecodeOf0(context, n.?.*);
             // Found out the specific return instruction we need.
             switch (context.function.op_stack.peek() orelse return error.NothingToReturn) {
                 .int => try context.function.writeOp(.IRETURN, 0),
@@ -94,25 +108,39 @@ fn writeOpsFromNode(context: *Context, node: Node) !void {
                 const inferred_type = try context.inferType(instance);
                 var return_type: ?*const Type = null;
                 for (inferred_type.@"struct".fields) |f| {
-                    if (std.mem.eql(u8, f.name, name)) return_type = f.type;
+                    if (std.mem.eql(u8, f.name, name)) return_type = f.type.@"fn".return_type;
                 }
                 if (return_type == null) return error.FieldNotFound;
                 const method_ref = try context.cpool.add_method_ref(
-                    try inferred_type.jvmName(gpa),
+                    inferred_type.@"struct".name,
                     name,
                     try createMethodDesc(context, args, return_type.?)
                 );
                 // Pushes instance 'objectref' on the stack
-                try writeOpsFromNode(context, instance.*);
+                try bytecodeOf0(context, instance.*);
                 for (args) |a| {
                     // Pushes args on the stack
-                    try writeOpsFromNode(context, a);
+                    try bytecodeOf0(context, a);
                 }
                 try context.function.writeOp(.INVOKEVIRTUAL, method_ref);
+                if (return_type) |r| switch (r.*) {
+                    .void => {},
+                    else => {
+                        try context.function.op_stack.push(.object);
+                    }
+                };
+
             } else {
                 std.debug.print("Cannot find a function '{s}'.\n", .{ n.name });
                 return error.CannotInferType;
             }
+        },
+        .string => |s| {
+            const i = try context.cpool.add_string(s.data);
+            try context.function.pushConstant(i);
+        },
+        .binary_op => |_| {
+            return error.TODO;
         },
         else => {
             std.debug.print("Unhandled node {any}\n", .{ node });
@@ -190,7 +218,7 @@ fn createFieldAccess(context: *Context, field: []const u8, typ: Type) !void {
 
 const sout = std.debug.print;
 
-pub fn print(bytecode: []const u8, print_constants: ?*Class) !void {
+pub fn print(bytecode: []const u8, print_constants: ?*ConstantPool) !void {
     var fixedReader = std.Io.Reader.fixed(bytecode);
     const r = &fixedReader;
     while (r.seek < r.end) {
@@ -212,11 +240,11 @@ pub fn print(bytecode: []const u8, print_constants: ?*Class) !void {
     }
 }
 
-fn printConstant(comptime width: type, r: *std.Io.Reader, maybePool: ?*Class) !void {
+fn printConstant(comptime width: type, r: *std.Io.Reader, maybePool: ?*ConstantPool) !void {
     const indx = try r.takeInt(width, .big);
     sout(", {any}", .{ indx });
     if (maybePool) |pool| {
-        const cp = pool.constant_pool;
+        const cp = pool.constant_list.items;
         sout(" ({s} ", .{ @tagName(cp[indx - 1]) });
         switch (cp[indx - 1]) {
             .utf_8_info => |c| sout("'{s}'", .{ c.bytes }),
@@ -232,7 +260,7 @@ fn printConstant(comptime width: type, r: *std.Io.Reader, maybePool: ?*Class) !v
     } else sout("\n", .{});
 }
 
-fn printOp(r: *std.Io.Reader, class: ?*Class, op: Op.Code) !void {
+fn printOp(r: *std.Io.Reader, class: ?*ConstantPool, op: Op.Code) !void {
     const meta = Op.meta(op) orelse return error.UndefinedMeta;
     sout(" | {s}", .{ meta.mnemonic });
     switch (meta.operand_form) {

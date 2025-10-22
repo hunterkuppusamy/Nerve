@@ -25,8 +25,8 @@ test {
 
 test "full" {
     const source =
-        \\const var String = [import]("java/lang/String")
-        \\const var System = [import]("java/lang/System")
+        \\const var System = [import]("test/java/lang/System.class")
+        \\const var String = [import]("test/java/lang/String.class")
         \\pub const var MyType = type {
         \\  var int = 1
         \\  var main = fn(args: String)->void {
@@ -47,15 +47,18 @@ test "full" {
     const file_owner = Node {
         .@"var" = .{
             .loc = .{ .line = 0, .src_start_ndx = 0, .src_end_ndx = 0 },
-            .mods = .{ .constant = true, .public = true },
+            .mods = .{ .constant = true, .public = true, .static = true, },
             .name = "file_name",
             .scope = .file,
             .type = null,
             .value = file
         }
     };
-    var context = try gen.CodegenContext.init(gpa);
-    const generated = try context.inferType(&file_owner);
+    var context = try gen.CodegenContext.init(gpa, "test/jdk");
+    const generated = context.inferType(&file_owner) catch |e| {
+        std.debug.print("Error while generating type.\n", .{});
+        return e;
+    };
     switch (generated.*) {
         .@"struct" => |*str| {
             try gen.generate(&context, str);
@@ -92,37 +95,37 @@ pub const Diagnostics = struct {
 };
 
 pub fn compile(source: []const u8) !void {
-    const gpa = std.heap.page_allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    const alloc = arena.allocator();
-    defer {
-        terminal.setState(.foreground, .{ .attribute = .reset });
-        std.log.info("Freeing compiler memory\n", .{});
-        _ = arena.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var tokenizer = lexer.Tokenizer.init(gpa, source);
+    const tokens = try tokenizer.tokenize();
+    var tokenParser = parser.Parser.init(gpa, tokens, source);
+    const file = try tokenParser.parse();
+    const file_owner = Node {
+        .@"var" = .{
+            .loc = .{ .line = 0, .src_start_ndx = 0, .src_end_ndx = 0 },
+            .mods = .{ .constant = true, .public = true, .static = true, },
+            .name = "Main",
+            .scope = .file,
+            .type = null,
+            .value = file
+        }
+    };
+    var context = try gen.CodegenContext.init(gpa, "test/jdk");
+    const generated = context.inferType(&file_owner) catch |e| {
+        std.debug.print("Error while generating type.\n", .{});
+        return e;
+    };
+    switch (generated.*) {
+        .@"struct" => |*str| {
+            try gen.generate(&context, str);
+            try write.writeClassFile("test/Main.class", context.class);
+        },
+        else => {
+            std.debug.print("Cannot generate a class file for a type that is not a struct.\n", .{});
+            return error.CannotGenerateClassOfNonStructType;
+        }
     }
-    terminal.setState(.underline, .{ .color = .black });
-    terminal.setState(.underline, .{ .color = .black });
-    terminal.setState(.foreground, .{ .color = .blue });
-
-    var lex = lexer.Tokenizer.init(alloc, source);
-
-    std.debug.print("Tokenizing...\n", .{});
-
-    const tokens = try lex.tokenize();
-    defer lex.allocator.free(tokens);
-
-    //std.debug.print("Alignment of token = {}\n", .{ @alignOf(lexer.Token) });
-
-    var parse = parser.Parser.init(alloc, tokens, source);
-
-    const nodes = try parse.parse();
-
-    std.log.info("Parsed all tokens to one {s}.", .{ @tagName(nodes.*) });
-
-    terminal.setState(.background, .{ .attribute = .italic });
-    terminal.setState(.foreground, .{ .color = .green });
-
-    // -1 to negate the first body's indent
-    nodes.print(-1);
-    std.debug.print("\n", .{});
 }

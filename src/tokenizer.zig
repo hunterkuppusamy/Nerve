@@ -60,8 +60,8 @@ pub const TokenKind = enum(u8) {
     right_arrow,
 
     keyword_pub, // declaration modifier
-
     keyword_const, // type or expression modifier
+    keyword_static,
 
     keyword_struct,
     keyword_enum,

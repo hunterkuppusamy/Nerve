@@ -56,11 +56,10 @@ pub fn deinit(self: *ConstantPool) void {
 
 /// internal helper: append a constant and mark wide-ness.
 fn appendConst(self: *ConstantPool, c: Class.Constant) !usize {
-    if (c == Class.Constant.utf_8_info) {
-        std.debug.print("Adding const '{s}'\n", .{c.utf_8_info.bytes});
-    } else std.debug.print("Adding const {any}\n", .{c});
-
     const idx = self.constant_list.items.len;
+    if (c == Class.Constant.utf_8_info) {
+        std.debug.print("Adding const #{} '{s}'\n", .{idx, c.utf_8_info.bytes});
+    } else std.debug.print("Adding const #{} {any}\n", .{idx, c});
     try self.constant_list.append(self.allocator, c);
     switch (c) {
         .long_info, .double_info => try self.constant_list.append(self.allocator, .placeholder),
@@ -107,7 +106,7 @@ pub fn add_name_and_type(self: *ConstantPool, name: []const u8, descriptor: []co
 pub fn add_method_ref(self: *ConstantPool, class: []const u8, name: []const u8, descriptor: []const u8) !usize {
     const class_h = try self.add_class(class);
     const nat_h = try self.add_name_and_type(name, descriptor);
-    const key: u64 = @intCast(class_h << 32 & nat_h);
+    const key: u64 = @intCast(class_h << 32 | nat_h);
     if (self.method_ref_map.get(key)) |h| return h;
     const c = Class.Constant{ .method_ref_info = .{
         .class_index = @intCast(class_h),
@@ -121,7 +120,7 @@ pub fn add_method_ref(self: *ConstantPool, class: []const u8, name: []const u8, 
 pub fn add_field_ref(self: *ConstantPool, class: []const u8, name: []const u8, descriptor: []const u8) !usize {
     const class_h = try self.add_class(class);
     const nat_h = try self.add_name_and_type(name, descriptor);
-    const key: u64 = @intCast(class_h << 32 & nat_h);
+    const key: u64 = @intCast(class_h << 32 | nat_h);
     if (self.field_ref_map.get(key)) |h| return h;
     const c = Class.Constant{ .field_ref_info = .{
         .class_index = @intCast(class_h),

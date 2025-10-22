@@ -27,6 +27,7 @@ const strCompare = struct {
 
 pub const CodegenContext = struct {
     allocator: std.mem.Allocator,
+    jdk_path: []const u8,
     imported: std.StringHashMap(Type),
     class: *Class,
     cpool: *ConstantPool,
@@ -35,14 +36,15 @@ pub const CodegenContext = struct {
 
     const Self = @This();
 
-    pub fn init(gpa: std.mem.Allocator) !Self {
+    pub fn init(gpa: std.mem.Allocator, jdk_path: []const u8) !Self {
         const class = try gpa.create(Class);
         const cpool = try gpa.create(ConstantPool);
         class.* = Class{};
         cpool.* = try ConstantPool.init(gpa);
 
-        const self = Self {
+        var self = Self {
             .allocator = gpa,
+            .jdk_path = jdk_path,
             .imported = std.StringHashMap(Type).init(gpa),
             .cpool = cpool,
             .class = class,
@@ -52,52 +54,195 @@ pub const CodegenContext = struct {
             .function = try FunctionContext.init(gpa),
         };
 
+        try self.prepImports();
+
         return self;
     }
 
-    fn prepImports(self: *Self) void {
+    fn prepImports(self: *Self) !void {
         inline for (@typeInfo(Type).@"union".fields) |f| {
             if (std.mem.eql(u8, f.name, "int")) {
-                self.imported.put(f.name, Type.int);
+                try self.static.putStatic(f.name, &@as(Type, Type.int));
             } else if (std.mem.eql(u8, f.name, "float")) {
-                self.imported.put(f.name, Type.float);
+                try self.static.putStatic(f.name, &@as(Type, Type.float));
             } else if (std.mem.eql(u8, f.name, "long")) {
-                self.imported.put(f.name, Type.long);
+                try self.static.putStatic(f.name, &@as(Type, Type.long));
             } else if (std.mem.eql(u8, f.name, "double")) {
-                self.imported.put(f.name, Type.double);
+                try self.static.putStatic(f.name, &@as(Type, Type.double));
             } else if (std.mem.eql(u8, f.name, "void")) {
-                self.imported.put(f.name, Type.void);
+                try self.static.putStatic(f.name, &@as(Type, Type.void));
             }
         }
         // Add my std
     }
 
-    /// Returns either a pointer to the existing type from the class's name,
-    /// or a pointer to the new type created which is owned by context.imported.
+    /// Returns either a pointer to the existing type from the class's name, or null
     pub fn getImport(self: *Self, path: []const u8) ?*Type {
         return self.imported.getPtr(path);
     }
 
-    pub fn importPath(self: *Self, path: []const u8) !*Type {
+    const ImportError = std.fs.File.OpenError || std.mem.Allocator.Error || std.Io.Reader.Error || error {
+        WrongMagic,
+        UnknownConstantTag,
+        AlreadyImported,
+        IllegalConstantPool,
+    };
+
+    /// Imports a .class file at the specified path.
+    pub fn importPath(self: *Self, path: []const u8) ImportError!*Type {
         const class = try read.readClassFile(self.allocator, path);
         return self.importClass(&class);
     }
 
-    pub fn importClass(self: *Self, class: *const Class) !*Type {
+    /// Creates a type from a jvm type descriptor.
+    fn importDescriptor(self: *Self, descriptor: []const u8) ImportError!Type {
         const gpa = self.allocator;
-        const path = class.constant_pool[class.this_class - 1].utf_8_info.bytes;
+        if (descriptor.len == 0) return ImportError.Unexpected;
+        var ret: Type = undefined;
+        if (std.mem.eql(u8, descriptor, "I")) {
+            ret = @as(Type, Type.int);
+        } else if (std.mem.eql(u8, descriptor, "F")) {
+            ret = @as(Type, Type.float);
+        } else if (std.mem.eql(u8, descriptor, "J")) {
+            ret = @as(Type, Type.long);
+        } else if (std.mem.eql(u8, descriptor, "D")) {
+            ret = @as(Type, Type.double);
+        } else if (std.mem.eql(u8, descriptor, "V")) {
+            ret = @as(Type, Type.void);
+        } else if (std.mem.eql(u8, descriptor, "B")) {
+            // BYTE
+            ret = @as(Type, Type.int);
+        } else if (std.mem.eql(u8, descriptor, "Z")) {
+            // BOOLEAN
+            ret = @as(Type, Type.int);
+        } else if (std.mem.eql(u8, descriptor, "S")) {
+            // SHORT
+            ret = @as(Type, Type.int);
+        } else if (std.mem.eql(u8, descriptor, "C")) {
+            // CHAR
+            ret = @as(Type, Type.int);
+        } else if (std.mem.startsWith(u8, descriptor, "[")) {
+            const element_type = self.importDescriptor(descriptor[1..]) catch |e| {
+                switch (e) {
+                    ImportError.Unexpected => std.debug.print("Error while importing descriptor '{s}'.\n", .{ descriptor[1..] }),
+                    else => {}
+                }
+                return e;
+            };
+
+            const e_ptr = try gpa.create(Type);
+            e_ptr.* = element_type;
+            ret = .{
+                .array = .{
+                    .elements = e_ptr,
+                }
+            };
+        } else if (std.mem.startsWith(u8, descriptor, "L")) {
+            const class_name = descriptor[1..descriptor.len - 1];
+            const file_path = try std.mem.concat(gpa, u8, &.{
+                self.jdk_path, "/", class_name, ".class"
+            });
+            // If already imported yank it, otherwise import the class.
+            //std.debug.print("Checking class import of '{s}'.\n", .{ class_name });
+            var found = self.getImport(class_name);
+            if (found) |f| {
+                ret = f.*;
+                gpa.destroy(f);
+            } else {
+                std.debug.print("Importing class at path '{s}'.\n", .{ file_path });
+                found = (try self.importPath(file_path));
+                ret = found.?.*;
+                try self.imported.put(class_name, ret);
+                gpa.destroy(found.?);
+            }
+        } else {
+            std.debug.print("Cannot import {s}: invalid descriptor.\n", .{ descriptor });
+            return ImportError.Unexpected;
+        }
+        return ret;
+    }
+
+    fn nextDesc(descriptor: []const u8) ?[]const u8 {
+        switch (descriptor[0]) {
+            'I', 'F', 'J', 'D', 'V', 'B', 'C', 'S', 'Z' => {
+                return descriptor[0..1];
+            },
+            '[' => {
+                const element = nextDesc(descriptor[1..]).?;
+                return descriptor[0..element.len + 1];
+            },
+            'L' => {
+                var len: usize = 0;
+                for (descriptor) |c| {
+                    if (c == ';') {
+                        //std.debug.print("Nextdesc = {s}.\n", .{ descriptor[0..len + 1] });
+                        return descriptor[0..len + 1];
+                    } else len += 1;
+                }
+            },
+            else => {
+                std.debug.print("Got {s}\n", .{ descriptor });
+                unreachable;
+            },
+        }
+        unreachable;
+    }
+
+    fn parseMethodDesc(self: *Self, descriptor: []const u8) !struct {
+        ret: Type,
+        params: []Type
+    } {
+        //std.debug.print("Parsing method desc {s}.\n", .{ descriptor });
+        var i: usize = 1; // opening paren
+        var params = try std.ArrayList(Type).initCapacity(self.allocator, 4);
+        var ret: Type = undefined;
+        while (i < descriptor.len) {
+            const char = descriptor[i];
+            if (char == ')') {
+                // Has to be a return type.
+                const ret_name = nextDesc(descriptor[(i + 1)..]).?;
+                const entry = try self.imported.getOrPut(ret_name);
+                if (!entry.found_existing) {
+                    //std.debug.print("Importing method return type {s}\n", .{ ret_name });
+                    ret = try self.importDescriptor(ret_name);
+                    entry.value_ptr.* = ret;
+                }
+                else ret = entry.value_ptr.*;
+
+                break;
+            }
+            const param_desc = nextDesc(descriptor[i..]) orelse break;
+            i += param_desc.len;
+            var param_type: Type = undefined;
+            const entry = try self.imported.getOrPut(param_desc);
+            if (!entry.found_existing) entry.value_ptr.* = param_type;
+            //std.debug.print("Importing method param type {s}\n", .{ param_desc });
+            param_type = try self.importDescriptor(param_desc);
+            try params.append(self.allocator, param_type);
+        }
+        return .{
+            .ret = ret,
+            .params = try params.toOwnedSlice(self.allocator),
+        };
+    }
+
+    /// Imports a class to the native Type.
+    pub fn importClass(self: *Self, class: *const Class) ImportError!*Type {
+        const gpa = self.allocator;
+        const name = class.constant_pool[class.constant_pool[class.this_class - 1].class_info.name_index - 1].utf_8_info.bytes;
+        //std.debug.print("Importing class '{s}'\n", .{ name });
 
         var fields = try std.ArrayList(Type.Struct.Field).initCapacity(gpa, 16);
-        try self.imported.put(path, Type {
-            .@"struct" = .{
-                .name = try gpa.dupe(u8, path),
-                .fields = undefined,
-            }
-        });
+        const entry = try self.imported.getOrPut(name);
+        if (entry.found_existing) return entry.value_ptr;
 
         for (class.fields) |f| {
             const fname = class.constant_pool[f.name_index - 1].utf_8_info.bytes;
-            const field_type_ptr = self.imported.getPtr(class.constant_pool[f.descriptor_index - 1].utf_8_info.bytes).?;
+            const descriptor = class.constant_pool[f.descriptor_index - 1].utf_8_info.bytes;
+            //std.debug.print("Importing field type {s}\n", .{ descriptor });
+            const field_type = try self.importDescriptor(descriptor);
+            const field_type_ptr = try gpa.create(Type);
+            field_type_ptr.* = field_type;
             try fields.append(gpa, .{
                 .access = f.access_flags,
                 .name = try gpa.dupe(u8, fname),
@@ -107,7 +252,31 @@ pub const CodegenContext = struct {
 
         for (class.methods) |m| {
             const fname = class.constant_pool[m.name_index - 1].utf_8_info.bytes;
-            const method_desc_ptr = self.imported.getPtr(class.constant_pool[m.descriptor_index - 1].utf_8_info.bytes).?;
+            const descriptor = class.constant_pool[m.descriptor_index - 1].utf_8_info.bytes;
+            const method_desc = try self.parseMethodDesc(descriptor);
+
+            var params = [_]Type.Fn.Param{ undefined } ** 32;
+            var param_i: u8 = 0;
+            for (method_desc.params) |p| {
+                const p_ptr = try gpa.create(Type);
+                p_ptr.* = p;
+                params[param_i] = Type.Fn.Param {
+                    .name = try std.fmt.allocPrint(gpa, "_{}", .{ param_i }),
+                    .type = p_ptr,
+                };
+                param_i += 1;
+            }
+
+            const fn_type = try gpa.create(Type);
+            const ret_type_ptr = try gpa.create(Type);
+            ret_type_ptr.* = method_desc.ret;
+            fn_type.* = .{
+                .@"fn" = .{
+                    .return_type = ret_type_ptr,
+                    .params = try gpa.dupe(Type.Fn.Param, params[0..param_i]),
+                    .body = &.{},
+                }
+            };
             var access = Class.FieldAccessFlags{};
             access.public = m.access_flags.public;
             access.static = m.access_flags.static;
@@ -118,34 +287,53 @@ pub const CodegenContext = struct {
             try fields.append(gpa, .{
                 .access = access,
                 .name = try gpa.dupe(u8, fname),
-                .type = method_desc_ptr,
+                .type = fn_type,
             });
         }
 
-        // Found existing should always be false atp.
-        const ptr = (try self.imported.getOrPut(path)).value_ptr;
+        const ptr = entry.value_ptr;
 
         ptr.* = Type {
             .@"struct" = .{
-                .name = path,
+                .name = name,
                 .fields = try fields.toOwnedSlice(gpa),
             }
         };
+
+        if (self.imported.get(name) == null) unreachable;
 
         return ptr;
     }
 
     pub fn inferType(self: *Self, node: *const Node) !*const Type {
         const gpa = self.allocator;
+        std.debug.print("Current allocation size {}.\n", .{ @as(*std.heap.ArenaAllocator, @alignCast(@ptrCast(gpa.ptr))).queryCapacity() });
         switch (node.*) {
             .@"var" => |n| {
-                if (n.type) |ret| return try inferType(self, ret);
+                std.debug.print("Declaring variable {s}.\n", .{ n.name });
+                var var_type = if (n.type) |ret| try inferType(self, ret)
+                else try self.inferType(n.value);
+                switch (var_type.*) {
+                    // TODO parse type here instead of recursion and changing it.
+                    .@"struct" => |t| {
+                        std.debug.print("Defining type declaration '{s}'.\n", .{ n.name });
+                        const named = Type {
+                            .@"struct" = .{
+                                .name = n.name,
+                                .fields = t.fields,
+                            }
+                        };
+                        gpa.destroy(var_type);
+                        const named_ptr = try gpa.create(Type);
+                        named_ptr.* = named;
+                        var_type = named_ptr;
+                    }, else => {}
+                }
+                return var_type;
             },
             .integer => return &@as(Type, Type.int),
             .float => return &@as(Type, Type.float),
             .type_decl => |n| {
-                const name: []const u8 = undefined;
-
                 var fields = try std.ArrayList(Type.Struct.Field).initCapacity(gpa, 8);
 
                 for (n.fields) |f| {
@@ -153,18 +341,23 @@ pub const CodegenContext = struct {
                     const mods = decl.mods;
                     var flags = Class.FieldAccessFlags{};
                     flags.public = mods.public;
-                    flags.private = !mods.public;
                     flags.final = mods.constant;
+                    flags.static = mods.static;
+                    const type_ptr = if (decl.type) |explicit|
+                        try self.inferType(explicit) else try self.inferType(decl.value);
+
+                    std.debug.print("Adding static {s} to context.\n", .{ decl.name });
+                    try self.static.putStatic(decl.name, type_ptr);
                     try fields.append(gpa, .{
-                        .access = .{},
+                        .access = flags,
                         .name = decl.name,
-                        .type = if (decl.type) |explicit| try self.inferType(explicit) else try self.inferType(decl.value),
+                        .type = type_ptr,
                     });
                 }
 
                 const ptr = try gpa.create(Type);
                 ptr.* = Type {
-                    .@"struct" = .{ .name = name, .fields = try fields.toOwnedSlice(gpa) }
+                    .@"struct" = .{ .name = undefined, .fields = try fields.toOwnedSlice(gpa) }
                 };
                 return ptr;
             },
@@ -199,7 +392,10 @@ pub const CodegenContext = struct {
                     const name = n.name;
                     if (std.mem.eql(u8, name, "import")) {
                         const path = n.args[0].string.data;
-                        return self.getImport(path) orelse try self.importPath(path);
+                        return self.getImport(path) orelse r: {
+                            std.debug.print("Import builtin called for '{s}'.\n", .{ path });
+                            break :r try self.importPath(path);
+                        };
                     } else if (std.mem.eql(u8, name, "asm")) {
                         return switch (self.function.op_stack.peek() orelse return &@as(Type, Type.void)) {
                             .int => &@as(Type, Type.int),
@@ -221,12 +417,11 @@ pub const CodegenContext = struct {
                 } else {
                     const local = self.function.getLocal(n.name);
                     if (local) |l| return l.type;
-                    return self.static.getField(n.name).?.type;
+                    return self.static.getStatic(n.name).?.type;
                 }
             },
             .field_access => |n| {
-                const instance = n.instance;
-                if (instance) |this| {
+                if (n.instance) |this| {
                     const this_type = (try inferType(self, this)).@"struct";
                     for (this_type.fields) |f| {
                         if (std.mem.eql(u8, f.name, n.name)) return f.type;
@@ -235,12 +430,25 @@ pub const CodegenContext = struct {
                     return error.CannotInferType;
                 } else if (self.function.getLocal(n.name)) |l| {
                     return l.type;
-                } else if (self.static.getField(n.name)) |d| {
+                } else if (self.static.getStatic(n.name)) |d| {
                     return d.type;
                 } else {
                     std.debug.print("Could not find local or static field '{s}'.\n", .{ n.name });
                     return error.CannotInferType;
                 }
+            },
+            .string => {
+                return self.getImport("java/lang/String").?;
+            },
+            .array_of => |n| {
+                const arr = try gpa.create(Type);
+                const elem = try self.inferType(n.element_type);
+                arr.* = Type {
+                    .array = .{
+                        .elements = elem,
+                    }
+                };
+                return arr;
             },
             else => {}
         }
@@ -251,7 +459,19 @@ pub const CodegenContext = struct {
     pub const StaticContext = struct {
         decls: std.ArrayList(Variable),
 
-        pub fn getField(self: *@This(), name: []const u8) ?Variable {
+        fn getContext(self: *StaticContext) *CodegenContext {
+            return @fieldParentPtr("static", self);
+        }
+
+        pub fn putStatic(self: *StaticContext, name: []const u8, t: *const Type) !void {
+            try self.decls.append(self.getContext().allocator, .{
+                .index = @intCast(self.decls.items.len),
+                .name = name,
+                .type = t,
+            });
+        }
+
+        pub fn getStatic(self: *StaticContext, name: []const u8) ?Variable {
             return util.findEql(Variable, []const u8, selectVariableName, strCompare, self.decls.items, name);
         }
     };
@@ -277,13 +497,15 @@ pub const CodegenContext = struct {
             const context = self.getContext();
             const byte_code = try self.bytecode.toOwnedSlice();
             std.debug.print("Created bytecode\n", .{});
-            try bytecode.print(byte_code, self.getContext().class);
+            try bytecode.print(byte_code, context.cpool);
+            std.debug.print("Locals = {}.\n", .{ self.locals });
+            std.debug.print("Stack = {}.\n", .{ self.op_stack.list });
             const code = Class.Attribute.Code {
                 .code = byte_code,
                 .max_locals = @intCast(self.locals.items.len),
                 .max_stack = @intCast(self.op_stack.list.items.len),
-                .exception_table = &[0]Class.Attribute.Code.Exception{},
-                .attributes = &[0]Class.Attribute{},
+                .exception_table = &.{},
+                .attributes = &.{},
             };
             const name_h = try context.cpool.add_utf8("Code");
             const attr_len = 12 + code.code.len + (code.exception_table.len * 8);
@@ -346,7 +568,7 @@ pub const CodegenContext = struct {
 
         pub fn pushConstant(self: *FunctionContext, h: usize) !void {
             const context = self.getContext();
-            const c = context.class.constant_pool[h - 1];
+            const c = context.cpool.constant_list.items[h - 1];
             switch (c) {
                 .long_info, .double_info => {
                     try self.writeOp(Op.Code.LDC2_W, h);
@@ -359,13 +581,7 @@ pub const CodegenContext = struct {
             } else {
                 try self.writeOp(Op.Code.LDC_W, h);
             }
-        }
-
-        pub fn create(self: *Self, body: []const Node) !void {
-            std.debug.print("createCode: Creating code for {any} nodes.\n", .{ body.len });
-            for (body) |node| {
-                try bytecode.createCode0(self, node);
-            }
+            try self.op_stack.push(.object);
         }
     };
 
@@ -430,13 +646,33 @@ pub fn generate(
                 context.function.op_stack.deinit();
                 context.function = try CodegenContext.FunctionContext.init(gpa);
 
-                try bytecode.writeOpsFromNodes(context, fun.body);
+                for (fun.params, 0..) |p, i| {
+                    try context.function.locals.append(gpa, .{
+                        .index = @intCast(i),
+                        .name = p.name,
+                        .type = p.type,
+                    });
+                }
+
+                if (!field.access.static) {
+                    const this_ptr = try gpa.create(Type);
+                    this_ptr.* = Type {
+                        .@"struct" = struct_type.*,
+                    };
+                    try context.function.locals.append(gpa, .{
+                        .index = @intCast(context.function.locals.items.len),
+                        .name = "this",
+                        .type = this_ptr,
+                    });
+                }
+
+                try bytecode.bytecodeOf(context, fun.body);
 
                 var flags = Class.MethodAccessFlags{};
                 flags.public = field.access.public;
-                flags.static = field.access.static;
-                flags.private = field.access.public;
+                flags.private = field.access.private;
                 flags.protected = field.access.protected;
+                flags.static = field.access.static;
                 flags.final = field.access.final;
 
                 const code = try context.function.toOwnedCode();
@@ -453,19 +689,18 @@ pub fn generate(
             },
             else => {
                 const desc_index = try context.cpool.add_utf8(try field.type.jvmName(gpa));
-                const attributes = &[0]Class.Attribute{};
-
                 context.class.fields[fields_index] = .{
                     .name_index = @truncate(name_h),
                     .descriptor_index = @intCast(desc_index),
                     .access_flags = field.access,
-                    .attributes = attributes,
+                    .attributes = &.{},
                 };
                 fields_index += 1;
             }
         }
     }
 
+    context.class.attributes = &.{};
     try context.cpool.populate(context.class);
 }
 

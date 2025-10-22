@@ -153,6 +153,12 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    const test_artifact = b.addInstallArtifact(
+        mod_tests,
+        .{ .dest_dir = .{ .override = .{ .custom = "tests" } } },
+    );
+    const install_test_step = b.step("install_test", "Create test binaries for debugging");
+    install_test_step.dependOn(&test_artifact.step);
 
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
