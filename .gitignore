@@ -9,7 +9,7 @@
 /dataSources/
 /dataSources.local.xml
 
-
+/test/
 /zig-out/
 /.zig-cache/
 /.idea/

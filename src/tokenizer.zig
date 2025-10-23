@@ -4,6 +4,8 @@ const testing = std.testing;
 const Diagnostics = @import("root.zig").Diagnostics;
 const expect = testing.expect;
 
+const log = std.log.scoped(.tokenizer);
+
 pub const Token = struct {
     source_data: SourceData,
     data: TokenData,
@@ -18,9 +20,7 @@ pub const SourceData = struct {
 
 pub const StringData = struct {
     /// A slice only containing the characters of the string
-        slice: root.STRING,
-    /// The raw allocated array. Should be freed when finished.
-        raw: ?root.HEAP_STRING = null,
+        slice: []const u8,
 };
 
 pub const TokenData = union(enum) {
@@ -131,7 +131,7 @@ pub const Tokenizer = struct {
         while (self.i < self.source.len) {
             const token = try self.lex() orelse continue;
             try arr.append(self.allocator, token);
-            std.debug.print("tokenize: Lexed kind {s}\n", .{@tagName(token.kind)});
+            log.debug("tokenize: Lexed kind {s}\n", .{@tagName(token.kind)});
             i += 1;
         }
 
@@ -160,7 +160,7 @@ pub const Tokenizer = struct {
             return null;
         }
 
-        std.debug.print("lex: Lexing {c} ({})...\n", .{ c, c });
+        log.debug("lex: Lexing {c} ({})...\n", .{ c, c });
         return try if (std.ascii.isAlphabetic(c))
             self.lexKeywordOrIdentifier()
         else if (std.ascii.isDigit(c))
@@ -259,7 +259,7 @@ pub const Tokenizer = struct {
         const str = self.source[start_i..self.i];
 
         if (decimals > 1) {
-            std.debug.print("lexLiteralNumber: Invalid number of decimals {}\n", .{decimals});
+            log.debug("lexLiteralNumber: Invalid number of decimals {}\n", .{decimals});
             self.diagnostics.err = .{
                 .error_type = error.InvalidCharacter,
                 .error_line = self.position_row,
@@ -284,8 +284,8 @@ pub const Tokenizer = struct {
         var c = self.source[self.i]; // opening quote
         self.i += 1;
         c = self.source[self.i];
-        // mutable HEAP_STRING
-        var buf: *[256:0]u8 = @ptrCast((try self.allocator.alloc(u8, 256)).ptr);
+        // Stack alloc string buffer
+        var buf: [1024]u8 = undefined;
         var i: u8 = 0;
         var escaped = false;
 
@@ -301,12 +301,12 @@ pub const Tokenizer = struct {
                 switch (c) {
                     'n' => buf[i] = '\n',
                     'r' => buf[i] = '\r',
-                    else => {},
+                    else => buf[i] = '\\',
                 }
+                // Probably should be an error
                 // If not a valid escape sequence nothing happens
                 escaped = false;
             }
-
             i += 1;
             self.i += 1;
             c = self.source[self.i];
@@ -316,15 +316,10 @@ pub const Tokenizer = struct {
         self.i += 1;
         // null terminator
         buf[i] = 0;
-        i += 1;
-
-        // doesnt include the null terminator; there is no need
-        const str: root.STRING = buf[0 .. i - 1];
 
         return .{
             .data = .{ .string = .{
-                .slice = str,
-                .raw = buf,
+                .slice = try self.allocator.dupe(u8, buf[0..i]),
             } },
             .kind = TokenKind.literal_string,
             .source_data = self.currentSourceData()
@@ -375,7 +370,7 @@ pub const Tokenizer = struct {
                     .error_column = self.position_col,
                     .error_message = "Reached unknown special character"
                 };
-                std.debug.print("Unknown special char '{c}'\n", .{ c });
+                log.err("Unknown special char '{c}'\n", .{ c });
                 return error.UnknownSpecialCharacter;
             },
         };

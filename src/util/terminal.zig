@@ -119,6 +119,7 @@ pub const ColorSpace = enum(u6) {
     background = 48,
     /// Not in standard, but supported by some popular terminals.
     underline = 58,
+    none = std.math.maxInt(u6),
 };
 
 pub fn setState(s: ColorSpace, c: State) void {
@@ -140,4 +141,54 @@ pub fn setTerminalState(w: *Writer, s: ColorSpace, c: State) !void {
             try w.print("\x1b[{}m", .{ @intFromEnum(c.attribute) });
         }
     }
+}
+
+pub var utc_offset: i4 = 0;
+
+pub const std_log_fn = struct { fn invoke(
+    comptime message_level: std.log.Level,
+    comptime scope: @TypeOf(.enum_literal),
+    comptime format: []const u8,
+    args: anytype
+) void {
+    const milliEpoch = std.time.milliTimestamp();
+    const hourEpoch = std.math.divTrunc(i64, milliEpoch, std.time.ms_per_hour) catch -1;
+    const minuteEpoch = std.math.divTrunc(i64, milliEpoch, std.time.ms_per_min) catch -1;
+    const secondEpoch = std.math.divTrunc(i64, milliEpoch, std.time.ms_per_s) catch -1;
+
+    const hour = std.math.rem(i64, hourEpoch, 24) catch -2;
+    const minute = std.math.rem(i64, minuteEpoch, 60) catch -2;
+    const second = std.math.rem(i64, secondEpoch, 60) catch -2;
+    const milli = std.math.rem(i64, milliEpoch, 1000) catch -2;
+
+    const level_text = comptime switch (message_level) {
+        .err => " E ",
+        .warn => " W ",
+        .info => " I ",
+        .debug => " D "
+    };
+    var time_buf: [12]u8 = undefined;
+    const time_string = std.fmt.bufPrint(
+        &time_buf, "{}:{}:{}.{}", .{ hour + utc_offset, minute, second, milli }
+    ) catch "error";
+    std.debug.print("{s:>12} | ", .{ time_string });
+    std.debug.print("{s:>15} | ", .{ @tagName(scope) });
+    setState(.foreground, .{ .color = .black }); // Black just works better
+    switch (message_level) {
+        .err => {
+            setState(.foreground, .{ .rgb_color = .{ 210, 210, 210 } }); // except here
+            setState(.background, .{ .rgb_color = .{ 180, 20, 20 } });
+        },
+        .warn =>  setState(.background, .{ .rgb_color = .{ 150, 150, 0 } }),
+        .info => setState(.background, .{ .rgb_color = .{ 0, 100, 180 } }),
+        .debug => setState(.background, .{ .rgb_color = .{ 0, 150, 0} })
+    }
+    std.debug.print(level_text, .{});
+    setState(.foreground, .{ .attribute = .reset });
+    std.debug.print(" | " ++ format ++ "\n", args);
+}}.invoke;
+
+pub fn logErr(err: anyerror, comptime fmt: []const u8, args: anytype) anyerror {
+    std.log.err(fmt, args);
+    return err;
 }

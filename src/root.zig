@@ -94,8 +94,14 @@ pub const Diagnostics = struct {
     } = null,
 };
 
-pub fn compile(source: []const u8) !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+pub fn compile(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    file_name: []const u8,
+    jdk_path: []const u8,
+    output_path: []const u8
+) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -107,13 +113,13 @@ pub fn compile(source: []const u8) !void {
         .@"var" = .{
             .loc = .{ .line = 0, .src_start_ndx = 0, .src_end_ndx = 0 },
             .mods = .{ .constant = true, .public = true, .static = true, },
-            .name = "Main",
+            .name = file_name,
             .scope = .file,
-            .type = null,
+            .type = null, // infer / generate from decl
             .value = file
         }
     };
-    var context = try gen.CodegenContext.init(gpa, "test/jdk");
+    var context = try gen.CodegenContext.init(gpa, jdk_path);
     const generated = context.inferType(&file_owner) catch |e| {
         std.debug.print("Error while generating type.\n", .{});
         return e;
@@ -121,7 +127,7 @@ pub fn compile(source: []const u8) !void {
     switch (generated.*) {
         .@"struct" => |*str| {
             try gen.generate(&context, str);
-            try write.writeClassFile("test/Main.class", context.class);
+            try write.writeClassFile(output_path, context.class);
         },
         else => {
             std.debug.print("Cannot generate a class file for a type that is not a struct.\n", .{});
