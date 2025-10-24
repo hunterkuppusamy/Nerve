@@ -1,15 +1,16 @@
 const std = @import("std");
+const log = std.log.scoped(.bytecode);
 const Stack = @import("util").Stack;
 const ConstantPool = @import("../ConstantPool.zig");
 const Type = @import("../type.zig").Type;
-const format = @import("format.zig");
+const format = @import("class.zig");
 const Op = format.Op;
-const gen = @import("gen.zig");
+const gen = @import("classgen.zig");
 const Code = Op.Code;
-const Node = @import("../AST.zig").Node;
+const Node = @import("../core/ast.zig").Node;
 const Class = format.Class;
 const read = @import("read.zig");
-const Context = @import("gen.zig").CodegenContext;
+const Context = @import("classgen.zig").CodegenContext;
 
 pub fn bytecodeOf(context: *Context, nodes: []const Node) !void {
     for (nodes) |node| {
@@ -33,11 +34,11 @@ fn pushInt(context: *Context, comptime T: type, v: anytype) !void {
 
 fn bytecodeOf0(context: *Context, node: Node) !void {
     const gpa = context.allocator;
-    std.debug.print("writeOpsFromNode: Creating {s}\n", .{ @tagName(node) });
-    defer std.debug.print("writeOpsFromNode: stack = {}\n", .{ context.function.op_stack.list });
+    log.debug("writeOpsFromNode: Creating {s}.", .{ @tagName(node) });
+    defer log.debug("writeOpsFromNode: stack = {}.", .{ context.function.op_stack.list });
     switch (node) {
         .@"var" => |n| {
-            std.debug.print("Varname = '{s}'\n", .{ n.name });
+            log.debug("Varname = '{s}'.", .{ n.name });
             try bytecodeOf0(context, n.value.*);
             const this = try context.function.getOrCreateLocal(n.name, try context.inferType(n.value));
             switch (this.type.*) {
@@ -80,7 +81,7 @@ fn bytecodeOf0(context: *Context, node: Node) !void {
                     // try context.function.writeOp(.GETSTATIC, class);
                     // try context.function.op_stack.push(.object);
                 } else {
-                    std.debug.print("Unknown variable '{s}'.\n", .{ name });
+                    log.err("Unknown variable '{s}'.", .{ name });
                     return error.UnknownVariable;
                 }
             }
@@ -131,7 +132,7 @@ fn bytecodeOf0(context: *Context, node: Node) !void {
                 };
 
             } else {
-                std.debug.print("Cannot find a function '{s}'.\n", .{ n.name });
+                log.err("Cannot find a function '{s}'.", .{ n.name });
                 return error.CannotInferType;
             }
         },
@@ -143,7 +144,7 @@ fn bytecodeOf0(context: *Context, node: Node) !void {
             return error.TODO;
         },
         else => {
-            std.debug.print("Unhandled node {any}\n", .{ node });
+            log.err("Unhandled node {any}", .{ node });
             return error.UnhandledNode;
         }
     }
@@ -216,7 +217,7 @@ fn createFieldAccess(context: *Context, field: []const u8, typ: Type) !void {
     }
 }
 
-const sout = std.debug.print;
+const sout = log.info;
 
 pub fn print(bytecode: []const u8, print_constants: ?*ConstantPool) !void {
     var fixedReader = std.Io.Reader.fixed(bytecode);
@@ -230,11 +231,11 @@ pub fn print(bytecode: []const u8, print_constants: ?*ConstantPool) !void {
             }
         }
         if (code == null) {
-            std.debug.print("Unknown op code {}.\n", .{ op_byte });
+            log.err("Unknown op code {}.", .{ op_byte });
             return error.UnknownOpCode;
         }
         printOp(r, print_constants, code.?) catch |e| {
-            sout("\nError while printing op {?}.\n", .{ code });
+            log.err("error while printing op {?}.", .{ code });
             return e;
         };
     }
@@ -273,7 +274,7 @@ fn printOp(r: *std.Io.Reader, class: ?*ConstantPool, op: Op.Code) !void {
         .U16_constant => try printConstant(u16, r, class),
         .branch_offset => sout(", {any}\n", .{ try r.takeInt(i16, .big) }),
         else => {
-            std.debug.print("\nUnhandled operand form '{s}'.\n", .{ @tagName(meta.operand_form) });
+            log.err("Unhandled operand form '{s}'.", .{ @tagName(meta.operand_form) });
             return error.Unhandled;
         }
     }

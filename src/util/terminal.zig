@@ -167,11 +167,22 @@ pub const std_log_fn = struct { fn invoke(
         .info => " I ",
         .debug => " D "
     };
+    var millis_buf: [3]u8 = undefined;
+    const milli_sting = std.fmt.bufPrint(&millis_buf, "{}", .{ milli }) catch "err";
+    var seconds_buf: [2]u8 = undefined;
+    const second_string = std.fmt.bufPrint(&seconds_buf, "{}", .{ second }) catch "err";
+    var minutes_buf: [2]u8 = undefined;
+    const minute_sting = std.fmt.bufPrint(&minutes_buf, "{}", .{ minute }) catch "err";
+    var hours_buf: [2]u8 = undefined;
+    const hour_sting = std.fmt.bufPrint(&hours_buf, "{}", .{ hour + utc_offset }) catch "err";
     var time_buf: [12]u8 = undefined;
-    const time_string = std.fmt.bufPrint(
-        &time_buf, "{}:{}:{}.{}", .{ hour + utc_offset, minute, second, milli }
-    ) catch "error";
-    std.debug.print("{s:>12} | ", .{ time_string });
+    const time_string = std.fmt.bufPrint(&time_buf, "{s:0>2}:{s:0>2}:{s:0>2}.{s:0>3}", .{
+        hour_sting,
+        minute_sting,
+        second_string,
+        milli_sting
+    }) catch "error";
+    std.debug.print("{s:>13} | ", .{ time_string });
     std.debug.print("{s:>15} | ", .{ @tagName(scope) });
     setState(.foreground, .{ .color = .black }); // Black just works better
     switch (message_level) {
@@ -179,9 +190,9 @@ pub const std_log_fn = struct { fn invoke(
             setState(.foreground, .{ .rgb_color = .{ 210, 210, 210 } }); // except here
             setState(.background, .{ .rgb_color = .{ 180, 20, 20 } });
         },
-        .warn =>  setState(.background, .{ .rgb_color = .{ 150, 150, 0 } }),
+        .warn =>  setState(.background, .{ .rgb_color = .{ 220, 200, 20 } }),
         .info => setState(.background, .{ .rgb_color = .{ 0, 100, 180 } }),
-        .debug => setState(.background, .{ .rgb_color = .{ 0, 150, 0} })
+        .debug => setState(.background, .{ .rgb_color = .{ 0, 180, 100} })
     }
     std.debug.print(level_text, .{});
     setState(.foreground, .{ .attribute = .reset });

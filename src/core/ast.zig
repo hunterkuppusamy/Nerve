@@ -1,8 +1,7 @@
 const std = @import("std");
-const BinaryOperation = @import("parser.zig").BinaryOperation;
-const UnaryOperation = @import("parser.zig").UnaryOperation;
 const root = @import("root");
-const Type = @import("type.zig").Type;
+const Type = @import("../type.zig").Type;
+const LineInfo = @import("LineInfo.zig");
 
 /// Just use arena for all allocations...
 ///
@@ -27,7 +26,7 @@ pub const Node = union(enum) {
 
     binary_op: BinaryOp,
     unary_op: UnaryOp,
-    @"var": VarDecl,
+    var_decl: VarDecl,
     @"if": If,
 
     // literals
@@ -66,7 +65,7 @@ pub const Node = union(enum) {
             .@"return" => |n| (n orelse return LineInfo{}).lineinfo(),
             .binary_op => |n| n.loc,
             .unary_op => |n| n.loc,
-            .@"var" => |n| n.loc,
+            .var_decl => |n| n.loc,
             .@"if" => |n| n.loc,
             .integer => |n| n.loc,
             .float => |n| n.loc,
@@ -201,13 +200,6 @@ pub const Node = union(enum) {
         };
     };
 
-    pub const LineInfo = struct {
-        src_start_ndx: usize = 0,
-        src_end_ndx: usize = 0,
-        /// If multiple lines, use the first line of appearance
-        line: usize = 0,
-    };
-
     fn printIndents(indents: isize) void {
         const v = if (indents < 0) 0 else indents;
         for (0..std.math.cast(usize, v).?) |_| {
@@ -245,9 +237,9 @@ pub const Node = union(enum) {
                 std.debug.print("{c}", .{o});
                 node.unary_op.rhs.print(indents);
             },
-            .@"var" => {
+            .var_decl => {
                 printIndents(indents);
-                const make = node.@"var";
+                const make = node.var_decl;
                 std.debug.print("var ", .{});
                 if (make.mods.constant) {
                     std.debug.print("const ", .{});

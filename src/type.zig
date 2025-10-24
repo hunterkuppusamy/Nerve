@@ -1,11 +1,13 @@
 const std = @import("std");
-const parser = @import("parser.zig");
-const Class = @import("jvm/format.zig").Class;
-const Node = @import("AST.zig").Node;
-const ProgramContext = @import("jvm/gen.zig").ProgramContext;
+const parser = @import("core/astgen.zig");
+const Class = @import("jvm/class.zig").Class;
+const Node = @import("core/ast.zig").Node;
+const ProgramContext = @import("jvm/classgen.zig").CodegenContext;
 
+/// Deprecated; Superseded by IR
 pub const Type = union(enum) {
     // Primitives with no meta-data.
+    byte,
     int,
     float,
     long,
@@ -14,12 +16,12 @@ pub const Type = union(enum) {
 
     @"struct": Struct,
     @"fn": Fn,
-    /// Not currently parsable, but exists to implement `Main.main([]String args){}`
     array: Array,
 
     pub fn jvmName(self: *const Type, gpa: std.mem.Allocator) ![]const u8 {
         return switch (self.*) {
             .int => "I",
+            .byte => "B",
             .float => "F",
             .long => "J",
             .double => "D",

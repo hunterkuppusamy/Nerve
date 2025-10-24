@@ -1,5 +1,5 @@
 const std = @import("std");
-const format = @import("format.zig");
+const format = @import("class.zig");
 const Class = format.Class;
 
 pub fn readClass(gpa: std.mem.Allocator, r: *std.Io.Reader, class: *Class) !void {

@@ -66,7 +66,7 @@
     // Only files and directories listed here are included in the `hash` that
     // is computed for this package. Only files listed here will remain on disk
     // when using the zig package manager. As a rule of thumb, one should list
-    // files required for compilation plus any license(s).
+    // files required for core plus any license(s).
     // Paths are relative to the build root. Use the empty string (`""`) to refer to
     // the build root itself.
     // A directory listed here means that all files within, recursively, are included.

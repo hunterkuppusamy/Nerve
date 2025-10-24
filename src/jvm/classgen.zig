@@ -1,13 +1,14 @@
 const std = @import("std");
-const format = @import("format.zig");
+const format = @import("class.zig");
+const log = std.log.scoped(.typegen);
 const Class = format.Class;
 const Op = format.Op;
 const root = @import("root");
 const Type = @import("../type.zig").Type;
-const Node = @import("../AST.zig").Node;
+const Node = @import("../core/ast.zig").Node;
 const Stack = @import("util").Stack;
-const Tokenizer = @import("../tokenizer.zig").Tokenizer;
-const Parser = @import("../parser.zig").Parser;
+const Tokenizer = @import("../core/tokengen.zig").Tokenizer;
+const Parser = @import("../core/astgen.zig").Parser;
 const ConstantPool = @import("../ConstantPool.zig");
 const bytecode = @import("bytecode.zig");
 const read = @import("read.zig");
@@ -77,8 +78,8 @@ pub const CodegenContext = struct {
     }
 
     /// Returns either a pointer to the existing type from the class's name, or null
-    pub fn getImport(self: *Self, path: []const u8) ?*Type {
-        return self.imported.getPtr(path);
+    pub fn getImport(self: *Self, qualified_name: []const u8) ?*Type {
+        return self.imported.getPtr(qualified_name);
     }
 
     const ImportError = std.fs.File.OpenError || std.mem.Allocator.Error || std.Io.Reader.Error || error {
@@ -124,7 +125,7 @@ pub const CodegenContext = struct {
         } else if (std.mem.startsWith(u8, descriptor, "[")) {
             const element_type = self.importDescriptor(descriptor[1..]) catch |e| {
                 switch (e) {
-                    ImportError.Unexpected => std.debug.print("Error while importing descriptor '{s}'.\n", .{ descriptor[1..] }),
+                    ImportError.Unexpected => log.err("Error while importing descriptor '{s}'.", .{ descriptor[1..] }),
                     else => {}
                 }
                 return e;
@@ -149,14 +150,14 @@ pub const CodegenContext = struct {
                 ret = f.*;
                 gpa.destroy(f);
             } else {
-                std.debug.print("Importing class at path '{s}'.\n", .{ file_path });
+                log.debug("Importing class at path '{s}'.", .{ file_path });
                 found = (try self.importPath(file_path));
                 ret = found.?.*;
                 try self.imported.put(class_name, ret);
                 gpa.destroy(found.?);
             }
         } else {
-            std.debug.print("Cannot import {s}: invalid descriptor.\n", .{ descriptor });
+            log.err("Cannot import {s}: invalid descriptor.", .{ descriptor });
             return ImportError.Unexpected;
         }
         return ret;
@@ -307,10 +308,10 @@ pub const CodegenContext = struct {
 
     pub fn inferType(self: *Self, node: *const Node) !*const Type {
         const gpa = self.allocator;
-        std.debug.print("Current allocation size {}.\n", .{ @as(*std.heap.ArenaAllocator, @alignCast(@ptrCast(gpa.ptr))).queryCapacity() });
+        log.debug("Current allocation size {}.", .{ @as(*std.heap.ArenaAllocator, @alignCast(@ptrCast(gpa.ptr))).queryCapacity() });
         switch (node.*) {
             .@"var" => |n| {
-                std.debug.print("Declaring variable {s}.\n", .{ n.name });
+                log.debug("Declaring variable {s}.", .{ n.name });
                 var var_type = if (n.type) |ret| try inferType(self, ret)
                 else try self.inferType(n.value);
                 switch (var_type.*) {
@@ -346,7 +347,7 @@ pub const CodegenContext = struct {
                     const type_ptr = if (decl.type) |explicit|
                         try self.inferType(explicit) else try self.inferType(decl.value);
 
-                    std.debug.print("Adding static {s} to context.\n", .{ decl.name });
+                    log.debug("Adding static {s} to context.", .{ decl.name });
                     try self.static.putStatic(decl.name, type_ptr);
                     try fields.append(gpa, .{
                         .access = flags,
@@ -393,7 +394,7 @@ pub const CodegenContext = struct {
                     if (std.mem.eql(u8, name, "import")) {
                         const path = n.args[0].string.data;
                         return self.getImport(path) orelse r: {
-                            std.debug.print("Import builtin called for '{s}'.\n", .{ path });
+                            log.debug("Import builtin called for '{s}'.", .{ path });
                             break :r try self.importPath(path);
                         };
                     } else if (std.mem.eql(u8, name, "asm")) {
@@ -403,7 +404,7 @@ pub const CodegenContext = struct {
                             else => error.CannotInferType,
                         };
                     }
-                    std.debug.print("Unknown builtin '{s}'.\n", .{ name });
+                    log.err("Unknown builtin '{s}'.", .{ name });
                     return error.CannotInferType;
                 }
                 const instance = n.instance;
@@ -412,7 +413,7 @@ pub const CodegenContext = struct {
                     for (this_type.fields) |f| {
                         if (std.mem.eql(u8, f.name, n.name)) return f.type.@"fn".return_type;
                     }
-                    std.debug.print("Could not find field '{s}' in type '{s}'.\n", .{ n.name, this_type.name });
+                    log.debug("Could not find field '{s}' in type '{s}'.", .{ n.name, this_type.name });
                     return error.CannotInferType;
                 } else {
                     const local = self.function.getLocal(n.name);
@@ -426,7 +427,7 @@ pub const CodegenContext = struct {
                     for (this_type.fields) |f| {
                         if (std.mem.eql(u8, f.name, n.name)) return f.type;
                     }
-                    std.debug.print("Could not find field '{s}' in type '{s}'.\n", .{ n.name, this_type.name });
+                    log.debug("Could not find field '{s}' in type '{s}'.", .{ n.name, this_type.name });
                     return error.CannotInferType;
                 } else if (self.function.getLocal(n.name)) |l| {
                     return l.type;
@@ -438,7 +439,17 @@ pub const CodegenContext = struct {
                 }
             },
             .string => {
-                return self.getImport("java/lang/String").?;
+                const str_type = self.getImport("java/lang/String") orelse {
+                    return error.NotImported;
+                };
+                switch (str_type.*) {
+                    .@"struct" => {},
+                    else => {
+                        log.err("String type was not a struct.", .{});
+                        return error.Unexpected;
+                    }
+                }
+                return str_type;
             },
             .array_of => |n| {
                 const arr = try gpa.create(Type);
@@ -452,7 +463,7 @@ pub const CodegenContext = struct {
             },
             else => {}
         }
-        std.debug.print("Cannot infer type of {any}.\n", .{ node });
+        log.debug("Cannot infer type of {any}.", .{ node });
         return error.CannotInferType;
     }
 
@@ -496,10 +507,10 @@ pub const CodegenContext = struct {
         pub fn toOwnedCode(self: *FunctionContext) !Class.Attribute {
             const context = self.getContext();
             const byte_code = try self.bytecode.toOwnedSlice();
-            std.debug.print("Created bytecode\n", .{});
-            try bytecode.print(byte_code, context.cpool);
-            std.debug.print("Locals = {}.\n", .{ self.locals });
-            std.debug.print("Stack = {}.\n", .{ self.op_stack.list });
+            log.debug("Created bytecode", .{});
+            //try bytecode.print(byte_code, context.cpool);
+            log.debug("Locals = {}.", .{ self.locals });
+            log.debug("Stack = {}.", .{ self.op_stack.list });
             const code = Class.Attribute.Code {
                 .code = byte_code,
                 .max_locals = @intCast(self.locals.items.len),
@@ -509,7 +520,7 @@ pub const CodegenContext = struct {
             };
             const name_h = try context.cpool.add_utf8("Code");
             const attr_len = 12 + code.code.len + (code.exception_table.len * 8);
-            std.debug.print("toOwnedCode: CodeAttr code len = {any}.\n", .{ code.code.len });
+            log.debug("toOwnedCode: CodeAttr code len = {any}.", .{ code.code.len });
             return .{
                 .attribute_name_index = @intCast(name_h),
                 .attribute_length = @intCast(attr_len),
@@ -543,7 +554,7 @@ pub const CodegenContext = struct {
         }
 
         pub fn writeOp(self: *FunctionContext, code: Op.Code, operand: anytype) !void {
-            std.debug.print("writeOp: writing op '{s}' {any}.\n", .{ @tagName(code), operand });
+            log.debug("writeOp: writing op '{s}' {any}.", .{ @tagName(code), operand });
             const inf = Op.meta(code)  orelse return error.NoOpCodeMeta;
             // Write opcode
             //try self.buffer.append(self.allocator, @intFromEnum(code));
@@ -628,7 +639,7 @@ pub fn generate(
     context.class.methods = try gpa.alloc(Class.MethodInfo, methods_len);
 
     for (struct_type.fields) |field| {
-        std.debug.print("generate: Generating field {s}.\n", .{ field.name });
+        log.debug("generate: Generating field {s}.", .{ field.name });
         const name_h = try context.cpool.add_utf8(field.name);
         switch (field.type.*) {
             .@"fn" => |fun| {

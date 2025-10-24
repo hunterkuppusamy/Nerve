@@ -16,10 +16,10 @@ pub const panic: type = std.debug.FullPanic(
         msg: []const u8,
         first_trace_addr: ?usize,
     ) noreturn {
-        log.err("Program panicked. This is exceptional behavior that is not intended to be reached.", .{});
+        log.err("Compiler panic. This is exceptional behavior.", .{});
         log.err("Panic: {s}", .{ msg });
         std.debug.dumpCurrentStackTrace(first_trace_addr orelse @returnAddress());
-        @trap();
+        std.process.exit(1);
     }}.panic,
 );
 
@@ -39,18 +39,10 @@ pub const std_options = std.Options {
 pub fn main() !void {
     // EST: during fall, -4, else -5
     terminal.utc_offset = -4;
-    log.info("Starting compilation.", .{});
+    log.info("Starting core.", .{});
     log.warn("v0 - expect bugs.", .{});
 
     const gpa = std.heap.page_allocator;
-    // const source =
-    //     \\const var System = [import]("java/lang/System.class")
-    //     \\const var String = [import]("java/lang/String.class")
-    //     \\pub static const var main = fn(args: []String)->void {
-    //     \\  System.out.println("hellomayasworld");
-    //     \\  return;
-    //     \\}
-    //     ;
     // cross platform args
     var args = try std.process.argsWithAllocator(gpa);
     defer args.deinit();
@@ -81,11 +73,12 @@ pub fn main() !void {
     const jdk_path = try requireValueOption(arg_map, "jdk_path")
         orelse return logErr(error.MissingJdk, "Specifying the JDK path is required.", .{});
     const source_path = try requireValueOption(arg_map, "src")
-        orelse "src.nerve";
+        orelse "test/src/main.nerve";
     const output_path = try requireValueOption(arg_map, "out")
-        orelse "Main.class";
+        orelse "test/out/Main.class";
 
-    const source_file = std.fs.cwd().openFile(source_path, .{ .mode = .read_only })
+    const cwd = std.fs.cwd();
+    const source_file = cwd.openFile(source_path, .{ .mode = .read_only })
         catch |e| return logErr(e, "Could not open source file '{s}'.", .{ source_path });
     var buf: [2048]u8 = undefined;
     var source_reader = source_file.reader(&buf);

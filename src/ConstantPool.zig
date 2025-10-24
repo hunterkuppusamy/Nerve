@@ -1,5 +1,5 @@
 const std = @import("std");
-const Class = @import("jvm/format.zig").Class;
+const Class = @import("jvm/class.zig").Class;
 
 const ConstantPool = @This();
 
@@ -58,8 +58,8 @@ pub fn deinit(self: *ConstantPool) void {
 fn appendConst(self: *ConstantPool, c: Class.Constant) !usize {
     const idx = self.constant_list.items.len;
     if (c == Class.Constant.utf_8_info) {
-        std.debug.print("Adding const #{} '{s}'\n", .{idx, c.utf_8_info.bytes});
-    } else std.debug.print("Adding const #{} {any}\n", .{idx, c});
+        std.log.debug("Adding const #{} '{s}'", .{idx, c.utf_8_info.bytes});
+    } else std.log.debug("Adding const #{} {any}", .{idx, c});
     try self.constant_list.append(self.allocator, c);
     switch (c) {
         .long_info, .double_info => try self.constant_list.append(self.allocator, .placeholder),

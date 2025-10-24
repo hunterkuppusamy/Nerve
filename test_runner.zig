@@ -231,7 +231,7 @@ const SlowTracker = struct {
         }
 
         {
-            // Optimization to avoid shifting the dequeue for the common case
+            // Optimization to avoid shifting the dequeue for the core case
             // where the test isn't one of our slowest.
             const fastest_of_the_slow = slowest.peekMin() orelse unreachable;
             if (fastest_of_the_slow.ns > ns) {

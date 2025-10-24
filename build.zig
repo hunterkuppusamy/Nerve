@@ -28,7 +28,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // This creates a module, which represents a collection of source files alongside
-    // some compilation options, such as optimization mode and linked system libraries.
+    // some core options, such as optimization mode and linked system libraries.
     // Zig modules are the preferred way of making Zig code available to consumers.
     // addModule defines a module that we intend to make available for importing
     // to our consumers. We must give it a name because a Zig package can expose
@@ -177,7 +177,7 @@ pub fn build(b: *std.Build) void {
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
     // The Zig build system is entirely implemented in userland, which means
-    // that it cannot hook into private compiler APIs. All compilation work
+    // that it cannot hook into private compiler APIs. All core work
     // orchestrated by the build system will result in other Zig compiler
     // subcommands being invoked with the right flags defined. You can observe
     // these invocations when one fails (or you pass a flag to increase

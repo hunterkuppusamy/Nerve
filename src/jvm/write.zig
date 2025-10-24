@@ -1,5 +1,5 @@
 const std = @import("std");
-const Class = @import("format.zig").Class;
+const Class = @import("class.zig").Class;
 
 pub fn writeClass(w: *std.Io.Writer, class: *const Class) !void {
     try w.writeInt(u32, class.magic, .big);
@@ -148,10 +148,13 @@ fn writeConstant(w: *std.Io.Writer, c: Class.Constant) !void {
 
 pub fn writeClassFile(path: []const u8, class: *const Class) !void {
     var buf: [2048]u8 = undefined;
-    var file = try std.fs.cwd().createFile(path, .{.lock = .exclusive,});
+    var file = try std.fs.cwd().createFile(path, .{
+        .lock = .exclusive,
+        .mode = 0o666 // rw-rw-rw-
+    });
     defer file.close();
     var fs = file.writer(&buf);
     var w = &fs.interface;
-    try @import("write.zig").writeClass(w, class);
+    try writeClass(w, class);
     try w.flush();
 }

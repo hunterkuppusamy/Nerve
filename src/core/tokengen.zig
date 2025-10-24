@@ -1,99 +1,15 @@
 const std = @import("std");
-const root = @import("root.zig");
+const root = @import("../root.zig");
 const testing = std.testing;
-const Diagnostics = @import("root.zig").Diagnostics;
+const Diagnostics = root.Diagnostics;
 const expect = testing.expect;
+const tokenfile = @import("token.zig");
+const Token = tokenfile.Token;
+const SourceData = tokenfile.SourceData;
+const TokenKind = tokenfile.TokenKind;
+const TokenData = tokenfile.TokenData;
 
 const log = std.log.scoped(.tokenizer);
-
-pub const Token = struct {
-    source_data: SourceData,
-    data: TokenData,
-    kind: TokenKind,
-};
-
-pub const SourceData = struct {
-    line: usize,
-    column: usize,
-    index: usize,
-};
-
-pub const StringData = struct {
-    /// A slice only containing the characters of the string
-        slice: []const u8,
-};
-
-pub const TokenData = union(enum) {
-    /// An allocated string slice, typically for literal_strings.
-    /// This is because escape sequences lead to more than just
-    /// source slices.
-    string: StringData,
-    integer: root.INTEGER,
-    u_integer: root.U_INTEGER,
-    float: root.FLOAT,
-    char: root.CHAR,
-    bool: bool,
-    none,
-};
-
-pub const TokenKind = enum(u8) {
-    identifier,
-
-    literal_string,
-    literal_integer,
-    literal_float,
-    literal_bool,
-
-    open_paren,
-    close_paren,
-    open_brace,
-    close_brace,
-    open_bracket,
-    close_bracket,
-
-    period,
-    comma,
-    colon,
-    semicolon,
-    equals, // assignment and equality, depending on number of occurrences
-
-    right_arrow,
-
-    keyword_pub, // declaration modifier
-    keyword_const, // type or expression modifier
-    keyword_static,
-
-    keyword_struct,
-    keyword_enum,
-
-    keyword_fn, // declare function
-    keyword_var, // declare variable
-    keyword_type, // declare type
-
-    keyword_if,
-    keyword_elif,
-    keyword_else,
-    // keyword_switch
-
-    keyword_while,
-    keyword_for,
-    keyword_break,
-    keyword_continue,
-
-    keyword_return,
-
-    operator_add,
-    operator_add_assign,
-    operator_sub,
-    operator_sub_assign,
-    operator_mul,
-    operator_mul_assign,
-    operator_div,
-    operator_div_assign,
-
-    operator_less_than,
-    operator_greater_than,
-};
 
 pub const Tokenizer = struct {
     const Self = @This();
@@ -129,9 +45,9 @@ pub const Tokenizer = struct {
         // While characters remain in the source
         // if there are extra characters some lex fn will throw.
         while (self.i < self.source.len) {
-            const token = try self.lex() orelse continue;
-            try arr.append(self.allocator, token);
-            log.debug("tokenize: Lexed kind {s}\n", .{@tagName(token.kind)});
+            const tok = try self.lex() orelse continue;
+            try arr.append(self.allocator, tok);
+            log.debug("tokenize: Lexed kind {s}.", .{@tagName(tok.kind)});
             i += 1;
         }
 
@@ -160,7 +76,7 @@ pub const Tokenizer = struct {
             return null;
         }
 
-        log.debug("lex: Lexing {c} ({})...\n", .{ c, c });
+        log.debug("lex: Lexing {c} ({})...", .{ c, c });
         return try if (std.ascii.isAlphabetic(c))
             self.lexKeywordOrIdentifier()
         else if (std.ascii.isDigit(c))
@@ -180,7 +96,7 @@ pub const Tokenizer = struct {
 
     fn increment(self: *Self) !void {
         self.i += 1;
-        if (self.i >= self.source.len) {
+        if (self.source.len < self.i) {
             self.diagnostics.err = .{
                 .error_type = error.EOF,
                 .error_line = self.position_row,
@@ -259,7 +175,7 @@ pub const Tokenizer = struct {
         const str = self.source[start_i..self.i];
 
         if (decimals > 1) {
-            log.debug("lexLiteralNumber: Invalid number of decimals {}\n", .{decimals});
+            log.debug("lexLiteralNumber: Invalid number of decimals {}.", .{decimals});
             self.diagnostics.err = .{
                 .error_type = error.InvalidCharacter,
                 .error_line = self.position_row,
@@ -392,35 +308,35 @@ pub const Tokenizer = struct {
 test "lexing identifier" {
     const name = "identifier";
     var lexer = Tokenizer{ .allocator = std.testing.allocator, .source = name ++ ";" };
-    const token = (try lexer.lex()).?;
-    try expect(token.kind == TokenKind.identifier);
-    try expect(token.data == TokenData.string);
-    try expect(std.mem.eql(u8, token.data.string.slice, name));
+    const tok = (try lexer.lex()).?;
+    try expect(tok.kind == TokenKind.identifier);
+    try expect(tok.data == TokenData.string);
+    try expect(std.mem.eql(u8, tok.data.string.slice, name));
 }
 
 test "lexing string" {
     const str = "hello";
     var lexer = Tokenizer{ .allocator = std.testing.allocator, .source = "\"" ++ str ++ "\"" };
-    const token = (try lexer.lex()).?;
-    defer lexer.allocator.free(token.data.string.raw.?);
-    try expect(token.kind == TokenKind.literal_string);
-    try expect(std.mem.eql(u8, token.data.string.slice, str));
+    const tok = (try lexer.lex()).?;
+    defer lexer.allocator.free(tok.data.string.raw.?);
+    try expect(tok.kind == TokenKind.literal_string);
+    try expect(std.mem.eql(u8, tok.data.string.slice, str));
 }
 
 test "lexing integer" {
     const int = "214";
     var lexer = Tokenizer{ .allocator = std.testing.allocator, .source = int ++ ";" };
-    const token = (try lexer.lex()).?;
-    try expect(token.kind == TokenKind.literal_integer);
-    try expect(token.data.integer == try std.fmt.parseInt(root.INTEGER, int, 10));
+    const tok = (try lexer.lex()).?;
+    try expect(tok.kind == TokenKind.literal_integer);
+    try expect(tok.data.integer == try std.fmt.parseInt(root.INTEGER, int, 10));
 }
 
 test "lexing float" {
     const pi = "3.141592";
     var lexer = Tokenizer{ .allocator = std.testing.allocator, .source = pi ++ ";" };
-    const token = (try lexer.lex()).?;
-    try expect(token.kind == TokenKind.literal_float);
-    try expect(token.data.float == try std.fmt.parseFloat(root.FLOAT, pi));
+    const tok = (try lexer.lex()).?;
+    try expect(tok.kind == TokenKind.literal_float);
+    try expect(tok.data.float == try std.fmt.parseFloat(root.FLOAT, pi));
 }
 
 test "lexing function body" {
@@ -436,8 +352,8 @@ test "lexing function body" {
     var kinds = [_]TokenKind{undefined} ** 19;
 
 
-    for (tokens, 0..) |token, i| {
-        kinds[i] = token.kind;
+    for (tokens, 0..) |tok, i| {
+        kinds[i] = tok.kind;
     }
 
     const expected = [_]TokenKind{

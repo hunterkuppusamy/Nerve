@@ -1,15 +1,18 @@
 const std = @import("std");
-const lexer = @import("tokenizer.zig");
-const root = @import("root.zig");
-const AST = @import("AST.zig");
-const Node = AST.Node;
-const LineInfo = Node.LineInfo;
+const tokengen = @import("tokengen.zig");
+const tokendef = @import("token.zig");
+const root = @import("../root.zig");
+const ast = @import("ast.zig");
+const Node = ast.Node;
+const LineInfo = @import("LineInfo.zig");
 const expect = std.testing.expect;
 const Diagnostics = root.Diagnostics;
-const TokenKind = lexer.TokenKind;
-const TokenData = lexer.TokenData;
-const Token = lexer.Token;
-const Type = @import("type.zig").Type;
+const TokenKind = tokendef.TokenKind;
+const TokenData = tokendef.TokenData;
+const Token = tokendef.Token;
+const Type = @import("../type.zig").Type;
+
+const log = std.log.scoped(.parser);
 
 pub const Parser = struct {
     // Parameters
@@ -41,7 +44,7 @@ pub const Parser = struct {
     fn consume(self: *Parser, kind: TokenKind) !Token {
         if (self._i >= self.tokens.len) return Error.UnexpectedEndOfFile;
         const token = self.tokens[self._i];
-        std.log.info("Try consume '{s}'", .{@tagName(kind)});
+        log.debug("Try consume '{s}'", .{@tagName(kind)});
         if (token.kind == kind) {
             self._i += 1;
             return token;
@@ -61,7 +64,7 @@ pub const Parser = struct {
                 else => {
                     const diags = self.diagnostics.err;
                     if (diags != null) {
-                        std.debug.print("Parsing error ({s}): {s}", .{ @errorName(diags.?.error_type), diags.?.error_message.? });
+                        log.debug("Parsing error ({s}): {s}", .{ @errorName(diags.?.error_type), diags.?.error_message.? });
                     }
                 },
             }
@@ -115,10 +118,10 @@ fn iWantedThingHere(self: *Parser, thing: []const u8) !void {
     const start_source_offset = first_token.source_data.index;
     const last_token = self.tokens[max];
     const last_source_offset = last_token.source_data.index;
-    std.debug.print("=--\n", .{});
+    log.debug("=--\n", .{});
 
     try writeSource(self.source[start_source_offset..last_source_offset], first_token.source_data.line);
-    std.debug.print("=--\n", .{});
+    log.debug("=--\n", .{});
 }
 
 fn writeSource(source: []const u8, line_start: usize) !void {
@@ -170,7 +173,7 @@ fn type_decl(self: *Parser, is_root: bool) !Node {
 
 /// Parses declarations (fields) inside a type.
 fn declaration(self: *Parser) !Node {
-    std.debug.print("parsing declaration\n", .{});
+    log.debug("parsing declaration", .{});
     const p = try self.peek();
     switch (p) {
         .keyword_const,
@@ -180,7 +183,7 @@ fn declaration(self: *Parser) !Node {
             return try variable(self, .file);
         },
         else => {
-            std.debug.print("Unhandled declaration token {s}.\n", .{ @tagName(p) });
+            log.debug("Unhandled declaration token {s}.", .{ @tagName(p) });
             return error.UnexpectedToken;
         }
     }
@@ -188,7 +191,7 @@ fn declaration(self: *Parser) !Node {
 
 /// Parses statements inside a function.
 fn statement(self: *Parser) !Node {
-    std.debug.print("parsing statement\n", .{});
+    log.debug("parsing statement", .{});
     const p = try self.peek();
     switch (p) {
         .keyword_const, .keyword_var => {
@@ -207,7 +210,7 @@ fn statement(self: *Parser) !Node {
             return try if_statement(self);
         },
         else => {
-            std.log.err("Expected start of statement, got '{s}'.", .{@tagName(p)});
+            log.err("Expected start of statement, got '{s}'.", .{@tagName(p)});
             return Parser.Error.ExpectedStartOfStatement;
             // return try expr(self);
         },
@@ -289,7 +292,7 @@ fn object_invoke_or_field_access(self: *Parser, instance: ?*Node) anyerror!Node 
         return error.IllegalExpression;
     } else if (!is_func) return Node {
         .field_access = .{
-            .loc = Node.LineInfo {
+            .loc = .{
                 .line = name.source_data.line,
                 .src_start_ndx = name.source_data.index,
                 .src_end_ndx = name.source_data.index + name.data.string.slice.len,
@@ -305,7 +308,7 @@ fn object_invoke_or_field_access(self: *Parser, instance: ?*Node) anyerror!Node 
     const closing = try self.consume(.close_paren);
     return .{
         .fn_invoke = .{
-            .loc = Node.LineInfo {
+            .loc = .{
                 .line = name.source_data.line,
                 .src_start_ndx = name.source_data.index,
                 .src_end_ndx = closing.source_data.index,
@@ -319,7 +322,7 @@ fn object_invoke_or_field_access(self: *Parser, instance: ?*Node) anyerror!Node 
 }
 
 fn if_statement(self: *Parser) anyerror!Node {
-    std.debug.print("parsing if statement\n", .{});
+    log.debug("parsing if statement\n", .{});
     const if_token = switch (try self.peek()) {
         .keyword_elif => try self.consume(.keyword_elif),
         else => try self.consume(.keyword_if),
@@ -359,25 +362,25 @@ fn factor(self: *Parser) !Node {
     const kind = try self.peek();
     switch (kind) {
         .literal_string => {
-            const token = try self.consume(.literal_string);
+            const tok = try self.consume(.literal_string);
             return .{ .string = .{
                 .loc = LineInfo{
-                    .line = token.source_data.line,
-                    .src_start_ndx = token.source_data.index,
-                    .src_end_ndx = token.source_data.index
+                    .line = tok.source_data.line,
+                    .src_start_ndx = tok.source_data.index,
+                    .src_end_ndx = tok.source_data.index
                 },
-                .data = try self.allocator.dupe(u8, token.data.string.slice)
+                .data = try self.allocator.dupe(u8, tok.data.string.slice)
             } };
         },
         .literal_bool => {
-            const token = try self.consume(.literal_bool);
+            const tok = try self.consume(.literal_bool);
             return .{ .bool = .{
                 .loc = LineInfo{
-                    .line = token.source_data.line,
-                    .src_start_ndx = token.source_data.index,
-                    .src_end_ndx = token.source_data.index
+                    .line = tok.source_data.line,
+                    .src_start_ndx = tok.source_data.index,
+                    .src_end_ndx = tok.source_data.index
                 },
-                .data = token.data.bool
+                .data = tok.data.bool
             } };
         },
         .literal_float => {
@@ -455,7 +458,7 @@ fn factor(self: *Parser) !Node {
 }
 
 fn arguments(self: *Parser) ![]Node {
-    std.debug.print("parsing arguments\n", .{});
+    log.debug("parsing arguments", .{});
     // if there are no expressions
     if (try self.peek() == .close_paren) return &[0]Node{};
 
@@ -474,13 +477,13 @@ fn arguments(self: *Parser) ![]Node {
 }
 
 fn function_decl(self: *Parser) !Node {
-    std.debug.print("parsing function\n", .{});
+    log.debug("parsing function", .{});
     // assert fn
     const keyword = try self.consume(.keyword_fn);
 
     // read params
     _ = try self.consume(.open_paren);
-    std.debug.print("parsing parameters\n", .{});
+    log.debug("parsing parameters", .{});
     const params = params: {
         if (try self.peek() == .close_paren) break :params &[0]Node.FnDecl.Param{};
 
@@ -514,7 +517,7 @@ fn function_decl(self: *Parser) !Node {
         _ = try self.consume(.close_brace);
     }
 
-    std.debug.print("Returned function\n", .{});
+    log.debug("Returned function", .{});
     return .{ .fn_decl = .{
         .loc = LineInfo {
             .line = keyword.source_data.line,
@@ -528,7 +531,7 @@ fn function_decl(self: *Parser) !Node {
 }
 
 fn body(self: *Parser) !Node {
-    std.debug.print("parsing body\n", .{});
+    log.debug("parsing body", .{});
     if (try self.peek() == .close_brace) {
         const closing = try self.consume(.close_brace);
         self._i -= 1;
@@ -619,7 +622,7 @@ fn term(self: *Parser) !Node {
 }
 
 fn expression(self: *Parser) anyerror!Node {
-    std.debug.print("parsing expression\n", .{});
+    log.debug("parsing expression", .{});
     var node = try term(self);
     var peeked = self.peek() catch |e| {
         if (e == Parser.Error.UnexpectedEndOfFile) return node else return e;
@@ -658,7 +661,7 @@ fn expression(self: *Parser) anyerror!Node {
 }
 
 fn lexAndParse(alloc: std.mem.Allocator, source: []const u8) !*Node {
-    var l = lexer.Tokenizer{ .allocator = alloc, .source = source };
+    var l = tokengen.Tokenizer{ .allocator = alloc, .source = source };
     const tokens = try l.tokenize();
     defer alloc.free(tokens);
     var p = Parser{
@@ -717,7 +720,7 @@ test "parse function expression" {
     const fun = decl.value.fn_decl;
     try expect(fun.params.len == 0);
     const return_type_name = fun.return_type.*.field_access.name;
-    std.debug.print("return type = '{s}'\n", .{ return_type_name });
+    log.debug("return type = '{s}'\n", .{ return_type_name });
     try expect(std.mem.eql(u8, return_type_name, "int"));
     // No body, the function just contains the literal integer. That is the implicit return value.
     const return_value = fun.body.integer.data;
@@ -740,7 +743,7 @@ test "parse function body" {
     const fun = decl.value.fn_decl;
     try expect(fun.params.len == 0);
     const return_type_name = fun.return_type.*.field_access.name;
-    std.debug.print("return type = '{s}'\n", .{ return_type_name });
+    log.debug("return type = '{s}'\n", .{ return_type_name });
     try expect(std.mem.eql(u8, return_type_name, "int"));
     const return_statement = fun.body.body.nodes[0];
     try expect(return_statement == Node.@"return");

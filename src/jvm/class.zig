@@ -1,5 +1,5 @@
 const std = @import("std");
-const CodeContext = @import("gen.zig").CodeContext;
+const CodeContext = @import("classgen.zig").CodeContext;
 
 /// Magic
 pub const class_format_header = 0xCAFEBABE;

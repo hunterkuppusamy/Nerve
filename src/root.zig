@@ -1,8 +1,10 @@
 const std = @import("std");
-const lexer = @import("tokenizer.zig");
-const parser = @import("parser.zig");
-const gen = @import("jvm/gen.zig");
-const Node = @import("AST.zig").Node;
+const tokengen = @import("core/tokengen.zig");
+const tokenfile = @import("core/token.zig");
+const Token = tokenfile.Token;
+const astgen = @import("core/astgen.zig");
+const gen = @import("jvm/classgen.zig");
+const Node = @import("core/ast.zig").Node;
 const terminal = @import("util").terminal;
 const write = @import("jvm/write.zig");
 const Type = @import("type.zig").Type;
@@ -13,12 +15,12 @@ pub const FLOAT = f32;
 pub const CHAR = u8;
 
 test {
-    _ = @import("tokenizer.zig");
-    _ = @import("parser.zig");
+    _ = @import("core/tokengen.zig");
+    _ = @import("core/astgen.zig");
     _ = @import("ConstantPool.zig");
     _ = @import("jvm/bytecode.zig");
-    _ = @import("jvm/gen.zig");
-    _ = @import("jvm/format.zig");
+    _ = @import("jvm/classgen.zig");
+    _ = @import("jvm/class.zig");
     _ = @import("jvm/read.zig");
     _ = @import("jvm/write.zig");
 }
@@ -40,9 +42,9 @@ test "full" {
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var tokenizer = lexer.Tokenizer.init(gpa, source);
+    var tokenizer = tokengen.Tokenizer.init(gpa, source);
     const tokens = try tokenizer.tokenize();
-    var tokenParser = parser.Parser.init(gpa, tokens, source);
+    var tokenParser = astgen.Parser.init(gpa, tokens, source);
     const file = try tokenParser.parse();
     const file_owner = Node {
         .@"var" = .{
@@ -87,7 +89,7 @@ pub const Diagnostics = struct {
         error_message: ?[*:0]const u8 = null,
         message_is_allocated: bool = false,
         data: ?union(enum) {
-            token_data: lexer.TokenData,
+            token_data: tokenfile.TokenData,
             i: i32,
             u: usize,
         } = null,
@@ -97,7 +99,7 @@ pub const Diagnostics = struct {
 pub fn compile(
     allocator: std.mem.Allocator,
     source: []const u8,
-    file_name: []const u8,
+    file_path: []const u8,
     jdk_path: []const u8,
     output_path: []const u8
 ) !void {
@@ -105,15 +107,27 @@ pub fn compile(
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var tokenizer = lexer.Tokenizer.init(gpa, source);
+    var tokenizer = @import("core/tokengen.zig").Tokenizer.init(gpa, source);
     const tokens = try tokenizer.tokenize();
-    var tokenParser = parser.Parser.init(gpa, tokens, source);
-    const file = try tokenParser.parse();
+
+    var parser = astgen.Parser.init(gpa, tokens, source);
+    const file = try parser.parse();
+
+    const file_name_cut = std.mem.cutScalarLast(u8, file_path, '/');
+    const file_name = if (file_name_cut) |f| f.@"1" else file_path;
+    var type_name = if (std.mem.endsWith(u8, file_name, ".nerve")) file_name[0..file_name.len - 6] else {
+        return terminal.logErr(error.BadFileName, "Nerve source file must end with .nerve (got '{s}').", .{ file_name });
+    };
+
+    if (std.mem.eql(u8, type_name, "main")) {
+        type_name = "Main";
+    }
+
     const file_owner = Node {
         .@"var" = .{
             .loc = .{ .line = 0, .src_start_ndx = 0, .src_end_ndx = 0 },
             .mods = .{ .constant = true, .public = true, .static = true, },
-            .name = file_name,
+            .name = type_name,
             .scope = .file,
             .type = null, // infer / generate from decl
             .value = file
@@ -127,7 +141,9 @@ pub fn compile(
     switch (generated.*) {
         .@"struct" => |*str| {
             try gen.generate(&context, str);
-            try write.writeClassFile(output_path, context.class);
+            write.writeClassFile(output_path, context.class) catch |e| {
+                return terminal.logErr(e, "Could not write to output file '{s}'.", .{ output_path });
+            };
         },
         else => {
             std.debug.print("Cannot generate a class file for a type that is not a struct.\n", .{});
