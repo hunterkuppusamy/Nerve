@@ -4,7 +4,7 @@ const tokendef = @import("token.zig");
 const root = @import("../root.zig");
 const ast = @import("ast.zig");
 const Node = ast.Node;
-const LineInfo = @import("LineInfo.zig");
+const LineInfo = @import("SourceSpan.zig");
 const expect = std.testing.expect;
 const Diagnostics = root.Diagnostics;
 const TokenKind = tokendef.TokenKind;
@@ -146,11 +146,11 @@ fn writeSource(source: []const u8, line_start: usize) !void {
 /// The first function invoked for parsing.
 fn type_decl(self: *Parser, is_root: bool) !Node {
     if (!is_root and try self.peek() == .close_brace)
-        return Node { .type_decl = .{ .loc = LineInfo{}, .fields = &.{} } };
+        return Node { .type_decl = .{ .source = LineInfo{}, .fields = &.{} } };
 
     var decls = try std.ArrayList(Node).initCapacity(self.allocator, 4);
     var decl = try declaration(self);
-    const first = decl.lineinfo();
+    const first = decl.source();
     try decls.append(self.allocator, decl);
 
     while (self._i + 1 < self.tokens.len) {
@@ -161,10 +161,10 @@ fn type_decl(self: *Parser, is_root: bool) !Node {
 
     return Node {
         .type_decl = .{
-            .loc = .{
+            .source = .{
                 .line = first.line,
                 .src_start_ndx = first.src_start_ndx,
-                .src_end_ndx = decl.lineinfo().src_end_ndx,
+                .src_end_ndx = decl.source().src_end_ndx,
             },
             .fields = try decls.toOwnedSlice(self.allocator)
         }
@@ -253,8 +253,8 @@ fn variable(self: *Parser, scope: Node.VarDecl.Scope) !Node {
     }
     _ = try self.consume(.equals);
     const e = try self.doAlloc(expression);
-    return .{ .@"var" = .{
-        .loc = LineInfo {
+    return .{ .var_decl = .{
+        .source = LineInfo {
             .line = var_token.source_data.line,
             .src_start_ndx = var_token.source_data.index,
             .src_end_ndx = 0 -| -1
@@ -274,12 +274,14 @@ fn variable(self: *Parser, scope: Node.VarDecl.Scope) !Node {
 fn object_invoke_or_field_access(self: *Parser, instance: ?*Node) anyerror!Node {
     var builtin = false;
     var is_func = false;
+
     if (try self.peek() == .open_bracket) {
         builtin = true;
-        is_func = true;
         _ = try self.consume(.open_bracket);
     }
+
     const name = try self.consume(.identifier);
+
     if (builtin) _ = try self.consume(.close_bracket);
 
     if (try self.peek() == .open_paren) is_func = true;
@@ -292,7 +294,7 @@ fn object_invoke_or_field_access(self: *Parser, instance: ?*Node) anyerror!Node 
         return error.IllegalExpression;
     } else if (!is_func) return Node {
         .field_access = .{
-            .loc = .{
+            .source = .{
                 .line = name.source_data.line,
                 .src_start_ndx = name.source_data.index,
                 .src_end_ndx = name.source_data.index + name.data.string.slice.len,
@@ -347,7 +349,7 @@ fn if_statement(self: *Parser) anyerror!Node {
         else => {},
     }
     return .{ .@"if" = .{
-        .loc = LineInfo {
+        .source = LineInfo {
             .line = if_token.source_data.line,
             .src_start_ndx = if_token.source_data.index,
             .src_end_ndx = closing.source_data.index
@@ -364,7 +366,7 @@ fn factor(self: *Parser) !Node {
         .literal_string => {
             const tok = try self.consume(.literal_string);
             return .{ .string = .{
-                .loc = LineInfo{
+                .source = LineInfo{
                     .line = tok.source_data.line,
                     .src_start_ndx = tok.source_data.index,
                     .src_end_ndx = tok.source_data.index
@@ -375,7 +377,7 @@ fn factor(self: *Parser) !Node {
         .literal_bool => {
             const tok = try self.consume(.literal_bool);
             return .{ .bool = .{
-                .loc = LineInfo{
+                .source = LineInfo{
                     .line = tok.source_data.line,
                     .src_start_ndx = tok.source_data.index,
                     .src_end_ndx = tok.source_data.index
@@ -386,7 +388,7 @@ fn factor(self: *Parser) !Node {
         .literal_float => {
             const token = try self.consume(.literal_float);
             return .{ .float = .{
-                .loc = LineInfo{
+                .source = LineInfo{
                     .line = token.source_data.line,
                     .src_start_ndx = token.source_data.index,
                     .src_end_ndx = token.source_data.index
@@ -397,7 +399,7 @@ fn factor(self: *Parser) !Node {
         .literal_integer => {
             const token = try self.consume(.literal_integer);
             return .{ .integer = .{
-                .loc = LineInfo{
+                .source = LineInfo{
                     .line = token.source_data.line,
                     .src_start_ndx = token.source_data.index,
                     .src_end_ndx = token.source_data.index
@@ -415,7 +417,7 @@ fn factor(self: *Parser) !Node {
             const token = try self.consume(.operator_sub);
             const node = try self.doAlloc(factor);
             return .{ .unary_op = .{
-                .loc = LineInfo{
+                .source = LineInfo{
                     .line = token.source_data.line,
                     .src_start_ndx = token.source_data.index,
                     .src_end_ndx = token.source_data.index
@@ -434,10 +436,10 @@ fn factor(self: *Parser) !Node {
             const expr = try self.doAlloc(expression);
             return .{
                 .array_of = .{
-                    .loc = .{
+                    .source = .{
                         .line = open.source_data.line,
                         .src_start_ndx = open.source_data.index,
-                        .src_end_ndx = expr.lineinfo().src_end_ndx,
+                        .src_end_ndx = expr.source().src_end_ndx,
                     },
                     .element_type = expr,
                 }
@@ -519,7 +521,7 @@ fn function_decl(self: *Parser) !Node {
 
     log.debug("Returned function", .{});
     return .{ .fn_decl = .{
-        .loc = LineInfo {
+        .source = LineInfo {
             .line = keyword.source_data.line,
             .src_start_ndx = keyword.source_data.index,
             .src_end_ndx = 0,
@@ -535,7 +537,7 @@ fn body(self: *Parser) !Node {
     if (try self.peek() == .close_brace) {
         const closing = try self.consume(.close_brace);
         self._i -= 1;
-        return .{ .body = .{ .loc = LineInfo{
+        return .{ .body = .{ .source = LineInfo{
             .line = closing.source_data.line,
             .src_start_ndx = closing.source_data.index - 1,
             .src_end_ndx = closing.source_data.index,
@@ -544,7 +546,7 @@ fn body(self: *Parser) !Node {
 
     var statements = try std.ArrayList(Node).initCapacity(self.allocator, 4);
     var s = try statement(self);
-    const first = s.lineinfo();
+    const first = s.source();
     try statements.append(self.allocator, s);
 
     while (self._i + 1 < self.tokens.len) {
@@ -558,10 +560,10 @@ fn body(self: *Parser) !Node {
     }
 
     return .{ .body = .{
-        .loc = LineInfo {
+        .source = LineInfo {
             .line = first.line,
             .src_start_ndx = first.src_start_ndx,
-            .src_end_ndx = s.lineinfo().src_end_ndx,
+            .src_end_ndx = s.source().src_end_ndx,
         },
         .nodes = try statements.toOwnedSlice(self.allocator)
     } };
@@ -575,7 +577,7 @@ fn parameter(self: *Parser) !Node.FnDecl.Param {
         .loc = LineInfo {
             .line = name.source_data.line,
             .src_start_ndx = name.source_data.index,
-            .src_end_ndx = typ.lineinfo().src_end_ndx,
+            .src_end_ndx = typ.source().src_end_ndx,
         },
         .name = try self.allocator.dupe(u8, name.data.string.slice),
         .type = typ,
@@ -607,7 +609,7 @@ fn term(self: *Parser) !Node {
         const rhs = try self.doAlloc(factor);
 
         node = .{ .binary_op = .{
-            .loc = .{
+            .source = .{
                 .line = 0,
                 .src_start_ndx = 0,
                 .src_end_ndx = 0,
@@ -643,7 +645,7 @@ fn expression(self: *Parser) anyerror!Node {
         const lhs = node;
         const rhs = try self.doAlloc(term);
         node = .{ .binary_op = .{
-            .loc = .{
+            .source = .{
                 .line = 0,
                 .src_start_ndx = 0,
                 .src_end_ndx = 0

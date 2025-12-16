@@ -50,7 +50,8 @@ pub const CodegenContext = struct {
             .cpool = cpool,
             .class = class,
             .static = .{
-                .decls = try std.ArrayList(Variable).initCapacity(gpa, 16),
+                .funs = try std.ArrayList(StaticContext.FnDef).initCapacity(gpa, 8),
+                .vars = try std.ArrayList(Variable).initCapacity(gpa, 16),
             },
             .function = try FunctionContext.init(gpa),
         };
@@ -275,7 +276,6 @@ pub const CodegenContext = struct {
                 .@"fn" = .{
                     .return_type = ret_type_ptr,
                     .params = try gpa.dupe(Type.Fn.Param, params[0..param_i]),
-                    .body = &.{},
                 }
             };
             var access = Class.FieldAccessFlags{};
@@ -306,87 +306,31 @@ pub const CodegenContext = struct {
         return ptr;
     }
 
-    pub fn inferType(self: *Self, node: *const Node) !*const Type {
+    pub fn resolveType(self: *Self, node: *const Node) !*const Type {
         const gpa = self.allocator;
         log.debug("Current allocation size {}.", .{ @as(*std.heap.ArenaAllocator, @alignCast(@ptrCast(gpa.ptr))).queryCapacity() });
         switch (node.*) {
-            .@"var" => |n| {
-                log.debug("Declaring variable {s}.", .{ n.name });
-                var var_type = if (n.type) |ret| try inferType(self, ret)
-                else try self.inferType(n.value);
-                switch (var_type.*) {
-                    // TODO parse type here instead of recursion and changing it.
-                    .@"struct" => |t| {
-                        std.debug.print("Defining type declaration '{s}'.\n", .{ n.name });
-                        const named = Type {
-                            .@"struct" = .{
-                                .name = n.name,
-                                .fields = t.fields,
-                            }
-                        };
-                        gpa.destroy(var_type);
-                        const named_ptr = try gpa.create(Type);
-                        named_ptr.* = named;
-                        var_type = named_ptr;
-                    }, else => {}
-                }
-                return var_type;
-            },
             .integer => return &@as(Type, Type.int),
             .float => return &@as(Type, Type.float),
-            .type_decl => |n| {
-                var fields = try std.ArrayList(Type.Struct.Field).initCapacity(gpa, 8);
-
-                for (n.fields) |f| {
-                    const decl = f.@"var";
-                    const mods = decl.mods;
-                    var flags = Class.FieldAccessFlags{};
-                    flags.public = mods.public;
-                    flags.final = mods.constant;
-                    flags.static = mods.static;
-                    const type_ptr = if (decl.type) |explicit|
-                        try self.inferType(explicit) else try self.inferType(decl.value);
-
-                    log.debug("Adding static {s} to context.", .{ decl.name });
-                    try self.static.putStatic(decl.name, type_ptr);
-                    try fields.append(gpa, .{
-                        .access = flags,
-                        .name = decl.name,
-                        .type = type_ptr,
-                    });
-                }
-
-                const ptr = try gpa.create(Type);
-                ptr.* = Type {
-                    .@"struct" = .{ .name = undefined, .fields = try fields.toOwnedSlice(gpa) }
+            .string => {
+                const str_type = self.getImport("java/lang/String") orelse {
+                    return error.NotImported;
                 };
-                return ptr;
-            },
-            .fn_decl => |n| {
-                var nodes: []const Node = undefined;
-                if (n.body.* == Node.body) { nodes = n.body.body.nodes; } else {
-                    const var_nodes = try gpa.alloc(Node, 1);
-                    var_nodes[0] = n.body.*;
-                    nodes = var_nodes;
-                }
-                var params = try std.ArrayList(Type.Fn.Param).initCapacity(gpa, 2);
-                for (n.params) |p| {
-                    const type_ptr = try inferType(self, p.type);
-                    try params.append(gpa, Type.Fn.Param {
-                        .name = p.name,
-                        .type = type_ptr
-                    });
-                }
-                const rtype = try inferType(self, n.return_type);
-                const ptr = try gpa.create(Type);
-                ptr.* = Type {
-                    .@"fn" = .{
-                        .body = try gpa.dupe(Node, nodes),
-                        .params = try params.toOwnedSlice(gpa),
-                        .return_type = rtype,
+                switch (str_type.*) {
+                    .@"struct" => {},
+                    else => {
+                        log.err("String type was not a struct.", .{});
+                        return error.Unexpected;
                     }
-                };
-                return ptr;
+                }
+                return str_type;
+            },
+            .var_decl => |v| {
+                log.debug("Declaring variable {s}.", .{ v.name });
+                const var_type = if (v.type) |ret|
+                    try resolveType(self, ret)
+                    else try self.declare(v);
+                return var_type;
             },
             .fn_invoke => |n| {
                 if (n.builtin) {
@@ -409,21 +353,19 @@ pub const CodegenContext = struct {
                 }
                 const instance = n.instance;
                 if (instance) |this| {
-                    const this_type = (try inferType(self, this)).@"struct";
+                    const this_type = (try resolveType(self, this)).@"struct";
                     for (this_type.fields) |f| {
                         if (std.mem.eql(u8, f.name, n.name)) return f.type.@"fn".return_type;
                     }
                     log.debug("Could not find field '{s}' in type '{s}'.", .{ n.name, this_type.name });
                     return error.CannotInferType;
                 } else {
-                    const local = self.function.getLocal(n.name);
-                    if (local) |l| return l.type;
-                    return self.static.getStatic(n.name).?.type;
+                    return util.terminal.logErr(error.CannotInferType, "Local functions not supported.", .{});
                 }
             },
             .field_access => |n| {
                 if (n.instance) |this| {
-                    const this_type = (try inferType(self, this)).@"struct";
+                    const this_type = (try resolveType(self, this)).@"struct";
                     for (this_type.fields) |f| {
                         if (std.mem.eql(u8, f.name, n.name)) return f.type;
                     }
@@ -438,22 +380,9 @@ pub const CodegenContext = struct {
                     return error.CannotInferType;
                 }
             },
-            .string => {
-                const str_type = self.getImport("java/lang/String") orelse {
-                    return error.NotImported;
-                };
-                switch (str_type.*) {
-                    .@"struct" => {},
-                    else => {
-                        log.err("String type was not a struct.", .{});
-                        return error.Unexpected;
-                    }
-                }
-                return str_type;
-            },
             .array_of => |n| {
                 const arr = try gpa.create(Type);
-                const elem = try self.inferType(n.element_type);
+                const elem = try self.resolveType(n.element_type);
                 arr.* = Type {
                     .array = .{
                         .elements = elem,
@@ -463,27 +392,109 @@ pub const CodegenContext = struct {
             },
             else => {}
         }
-        log.debug("Cannot infer type of {any}.", .{ node });
+        log.err("Cannot infer type of {any}.", .{ node });
         return error.CannotInferType;
     }
 
+    pub fn declare(self: *Self, var_node: Node.VarDecl) anyerror!*const Type {
+        const gpa = self.allocator;
+        switch (var_node.value.*) {
+            .type_decl => |decl| {
+                var fields = try std.ArrayList(Type.Struct.Field).initCapacity(gpa, 8);
+
+                for (decl.fields) |f| {
+                    const field_decl = f.var_decl;
+                    const mods = field_decl.mods;
+                    var flags = Class.FieldAccessFlags{};
+                    flags.public = mods.public;
+                    flags.final = mods.constant;
+                    flags.static = mods.static;
+                    const type_ptr = if (field_decl.type) |explicit|
+                        try self.resolveType(explicit) else try self.resolveType(field_decl.value);
+
+                    log.debug("Adding static {s} to context.", .{ field_decl.name });
+                    try self.static.putStatic(field_decl.name, type_ptr);
+                    try fields.append(gpa, .{
+                        .access = flags,
+                        .name = field_decl.name,
+                        .type = type_ptr,
+                    });
+                }
+
+                const ptr = try gpa.create(Type);
+                ptr.* = Type {
+                    .@"struct" = .{
+                        .name = var_node.name,
+                        .fields = try fields.toOwnedSlice(gpa)
+                    }
+                };
+                return ptr;
+            },
+            .fn_decl => |n| {
+                var nodes: []const Node = undefined;
+                if (n.body.* == Node.body) { nodes = n.body.body.nodes; } else {
+                    const var_nodes = try gpa.alloc(Node, 1);
+                    var_nodes[0] = n.body.*;
+                    nodes = var_nodes;
+                }
+                var params = try std.ArrayList(Type.Fn.Param).initCapacity(gpa, 2);
+                for (n.params) |p| {
+                    const type_ptr = try resolveType(self, p.type);
+                    try params.append(gpa, Type.Fn.Param {
+                        .name = p.name,
+                        .type = type_ptr
+                    });
+                }
+                const rtype = try resolveType(self, n.return_type);
+                const ptr = try gpa.create(Type);
+                ptr.* = Type {
+                    .@"fn" = .{
+                        .params = try params.toOwnedSlice(gpa),
+                        .return_type = rtype,
+                    }
+                };
+                var body = try std.ArrayList(Node).initCapacity(gpa, 1);
+                switch (n.body.*) {
+                    .body => |b| {
+                        try body.appendSlice(gpa, b.nodes);
+                    },
+                    else => |b| try body.append(gpa, b),
+                }
+                try self.static.funs.append(gpa, .{
+                    .type = ptr,
+                    .name = var_node.name,
+                    .body = try body.toOwnedSlice(gpa),
+                });
+                return ptr;
+            },
+            else => return util.terminal.logErr(error.CannotDeclare, "Cannot declare node '{s}'.", .{ @tagName(var_node.value.*) }),
+        }
+    }
+
     pub const StaticContext = struct {
-        decls: std.ArrayList(Variable),
+        vars: std.ArrayList(Variable),
+        funs: std.ArrayList(FnDef),
+
+        pub const FnDef = struct {
+            name: []const u8,
+            type: *const Type,
+            body: []Node,
+        };
 
         fn getContext(self: *StaticContext) *CodegenContext {
             return @fieldParentPtr("static", self);
         }
 
         pub fn putStatic(self: *StaticContext, name: []const u8, t: *const Type) !void {
-            try self.decls.append(self.getContext().allocator, .{
-                .index = @intCast(self.decls.items.len),
+            try self.vars.append(self.getContext().allocator, .{
+                .index = @intCast(self.vars.items.len),
                 .name = name,
                 .type = t,
             });
         }
 
         pub fn getStatic(self: *StaticContext, name: []const u8) ?Variable {
-            return util.findEql(Variable, []const u8, selectVariableName, strCompare, self.decls.items, name);
+            return util.findEql(Variable, []const u8, selectVariableName, strCompare, self.vars.items, name);
         }
     };
 
@@ -677,7 +688,7 @@ pub fn generate(
                     });
                 }
 
-                try bytecode.bytecodeOf(context, fun.body);
+                try bytecode.bytecodeOf(context, unreachable);
 
                 var flags = Class.MethodAccessFlags{};
                 flags.public = field.access.public;

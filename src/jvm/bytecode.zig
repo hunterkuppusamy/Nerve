@@ -37,10 +37,10 @@ fn bytecodeOf0(context: *Context, node: Node) !void {
     log.debug("writeOpsFromNode: Creating {s}.", .{ @tagName(node) });
     defer log.debug("writeOpsFromNode: stack = {}.", .{ context.function.op_stack.list });
     switch (node) {
-        .@"var" => |n| {
+        .var_decl => |n| {
             log.debug("Varname = '{s}'.", .{ n.name });
             try bytecodeOf0(context, n.value.*);
-            const this = try context.function.getOrCreateLocal(n.name, try context.inferType(n.value));
+            const this = try context.function.getOrCreateLocal(n.name, try context.resolveType(n.value));
             switch (this.type.*) {
                 .int => try context.function.writeOp(Op.Code.ISTORE, this.index),
                 .float => try context.function.writeOp(Op.Code.FSTORE, this.index),
@@ -54,7 +54,7 @@ fn bytecodeOf0(context: *Context, node: Node) !void {
             const name = n.name;
 
             if (n.instance) |instance| {
-                const inferred_type = (try context.inferType(instance)).@"struct";
+                const inferred_type = (try context.resolveType(instance)).@"struct";
                 try bytecodeOf0(context, instance.*);
                 const field = inferred_type.fieldByName(name) orelse return error.NoSuchField;
                 var return_type= field.type;
@@ -106,7 +106,7 @@ fn bytecodeOf0(context: *Context, node: Node) !void {
             const args = n.args;
             if (n.builtin) return try createBuiltinBytecode(context, name, args);
             if (n.instance) |instance| {
-                const inferred_type = try context.inferType(instance);
+                const inferred_type = try context.resolveType(instance);
                 var return_type: ?*const Type = null;
                 for (inferred_type.@"struct".fields) |f| {
                     if (std.mem.eql(u8, f.name, name)) return_type = f.type.@"fn".return_type;
@@ -154,7 +154,7 @@ fn bytecodeOf0(context: *Context, node: Node) !void {
 fn createMethodDesc(context: *Context, args: []const Node, ret: *const Type) ![]const u8 {
     const params = try context.allocator.alloc([]const u8, args.len);
     for (args, 0..) |a, i| {
-        const typ = try context.inferType(&a);
+        const typ = try context.resolveType(&a);
         const name = try typ.jvmName(context.allocator);
         params[i] = name;
     }

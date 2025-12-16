@@ -4,7 +4,6 @@ const Class = @import("jvm/class.zig").Class;
 const Node = @import("core/ast.zig").Node;
 const ProgramContext = @import("jvm/classgen.zig").CodegenContext;
 
-/// Deprecated; Superseded by IR
 pub const Type = union(enum) {
     // Primitives with no meta-data.
     byte,
@@ -73,7 +72,6 @@ pub const Type = union(enum) {
     pub const Fn = struct {
         params: []const Param,
         return_type: *const Type,
-        body: []const Node,
 
         pub const Param = struct {
             name: []const u8,
@@ -95,4 +93,11 @@ pub const Type = union(enum) {
         name: []const u8,
         params: []const Fn.Param,
     };
+
+    pub fn eql(self: *Type, other: *Type) bool {
+        if (@intFromPtr(self) == @intFromPtr(other)) return true;
+        switch (self.*) {
+            .@"struct" => {}
+        }
+    }
 };

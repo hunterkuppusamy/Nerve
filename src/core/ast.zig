@@ -1,7 +1,9 @@
 const std = @import("std");
 const root = @import("root");
 const Type = @import("../type.zig").Type;
-const LineInfo = @import("LineInfo.zig");
+const BinaryOperation = @import("util").op.BinaryOperation;
+const UnaryOperation = @import("util").op.UnaryOperation;
+const SourceSpan = @import("SourceSpan.zig");
 
 /// Just use arena for all allocations...
 ///
@@ -31,60 +33,41 @@ pub const Node = union(enum) {
 
     // literals
     integer: struct {
-        loc: LineInfo,
-        data: i32
-    },
-    u_integer: struct {
-        loc: LineInfo,
-        data: u32
+        data: i32,
+        source: SourceSpan,
     },
     float: struct {
-        loc: LineInfo,
-        data: f32
+        data: f32,
+        source: SourceSpan,
     },
     byte: struct {
-        loc: LineInfo,
+        source: SourceSpan,
         data: u8
     },
     bool: struct {
-        loc: LineInfo,
-        data: bool
+        data: bool,
+        source: SourceSpan,
     },
     string: struct {
-        loc: LineInfo,
         data: []const u8,
+        source: SourceSpan,
     },
 
-    pub fn lineinfo(self: *Node) LineInfo {
+    pub fn source(self: *Node) SourceSpan {
         return switch (self.*) {
-            .type_decl => |n| n.loc,
-            .field_access => |n| n.loc,
-            .fn_decl => |n| n.loc,
-            .fn_invoke => |n| n.loc,
-            .body => |n| n.loc,
-            .@"return" => |n| (n orelse return LineInfo{}).lineinfo(),
-            .binary_op => |n| n.loc,
-            .unary_op => |n| n.loc,
-            .var_decl => |n| n.loc,
-            .@"if" => |n| n.loc,
-            .integer => |n| n.loc,
-            .float => |n| n.loc,
-            .u_integer => |n| n.loc,
-            .byte => |n| n.loc,
-            .bool => |n| n.loc,
-            .string => |n| n.loc,
-            .array_of => |n| n.loc,
+            .@"return" => |n| (n orelse return SourceSpan{}).source(),
+            inline else => |n| return n.loc,
         };
     }
 
     pub const TypeDecl = struct {
-        loc: LineInfo,
         fields: []const Node,
+        source: SourceSpan,
     };
 
     pub const ArrayOf = struct {
-        loc: LineInfo,
         element_type: *Node,
+        source: SourceSpan,
     };
 
     //
@@ -103,14 +86,13 @@ pub const Node = union(enum) {
     // };
 
     pub const If = struct {
-        loc: LineInfo,
         condition: *Node,
         branch_true: *Node,
         branch_false: ?*Node,
+        source: SourceSpan,
     };
 
     pub const VarDecl = struct {
-        loc: LineInfo,
         scope: Scope,
         name: []const u8,
         mods: packed struct {
@@ -122,57 +104,33 @@ pub const Node = union(enum) {
         /// Can either be a declared variable or a type declared right here.
         type: ?*Node,
         value: *Node,
+        source: SourceSpan,
 
         /// Local variables cannot be public.
         pub const Scope = enum { file, type, local };
     };
 
     pub const UnaryOp = struct {
-        loc: LineInfo,
-        op: Op,
         rhs: *Node,
-
-        pub const Op = enum {
-            negate,
-        };
+        op: UnaryOperation,
+        source: SourceSpan,
     };
 
     pub const BinaryOp = struct {
-        loc: LineInfo,
-        op: Op,
         lhs: *Node,
         rhs: *Node,
-
-        pub const Op = enum {
-            // zig fmt: align
-            // Op | Op then assign
-            add,
-            adda,
-
-            sub,
-            suba,
-
-            mul,
-            mula,
-
-            div,
-            diva,
-
-            lt,
-            lte,
-            gt,
-            gte,
-        };
+        op: BinaryOperation,
+        source: SourceSpan,
     };
 
     pub const Body = struct {
-        loc: LineInfo,
         nodes: []const Node,
+        source: SourceSpan,
     };
 
     /// If instance is null, the access is local.
     pub const FieldAccess = struct {
-        loc: LineInfo,
+        source: SourceSpan,
         builtin: bool,
         instance: ?*Node,
         name: []const u8,
@@ -180,7 +138,7 @@ pub const Node = union(enum) {
 
     // No idea what a null instance here would mean. Local function eventually probably.
     pub const FnInvoke = struct {
-        loc: LineInfo,
+        source: SourceSpan,
         builtin: bool,
         instance: ?*Node,
         name: []const u8,
@@ -188,13 +146,13 @@ pub const Node = union(enum) {
     };
 
     pub const FnDecl = struct {
-        loc: LineInfo,
+        source: SourceSpan,
         params: []const Param,
         return_type: *Node,
         body: *Node,
 
         pub const Param = struct {
-            loc: LineInfo,
+            loc: SourceSpan,
             name: []const u8,
             type: *Node,
         };

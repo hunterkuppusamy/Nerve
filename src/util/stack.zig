@@ -2,6 +2,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub fn Stack(comptime T: type) type {
+    return StackManaged(T);
+}
+
+pub fn StackManaged(comptime T: type) type {
     return struct {
         list: std.ArrayList(T),
         allocator: Allocator,

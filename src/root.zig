@@ -3,8 +3,10 @@ const tokengen = @import("core/tokengen.zig");
 const tokenfile = @import("core/token.zig");
 const Token = tokenfile.Token;
 const astgen = @import("core/astgen.zig");
+const irgen = @import("core/irgen.zig");
 const gen = @import("jvm/classgen.zig");
-const Node = @import("core/ast.zig").Node;
+const Ast = @import("core/ast.zig").Node;
+const Ir = @import("core/ir.zig").Node;
 const terminal = @import("util").terminal;
 const write = @import("jvm/write.zig");
 const Type = @import("type.zig").Type;
@@ -46,7 +48,7 @@ test "full" {
     const tokens = try tokenizer.tokenize();
     var tokenParser = astgen.Parser.init(gpa, tokens, source);
     const file = try tokenParser.parse();
-    const file_owner = Node {
+    const file_owner = Ast {
         .@"var" = .{
             .loc = .{ .line = 0, .src_start_ndx = 0, .src_end_ndx = 0 },
             .mods = .{ .constant = true, .public = true, .static = true, },
@@ -57,7 +59,7 @@ test "full" {
         }
     };
     var context = try gen.CodegenContext.init(gpa, "test/jdk");
-    const generated = context.inferType(&file_owner) catch |e| {
+    const generated = context.resolveType(&file_owner) catch |e| {
         std.debug.print("Error while generating type.\n", .{});
         return e;
     };
@@ -123,18 +125,11 @@ pub fn compile(
         type_name = "Main";
     }
 
-    const file_owner = Node {
-        .@"var" = .{
-            .loc = .{ .line = 0, .src_start_ndx = 0, .src_end_ndx = 0 },
-            .mods = .{ .constant = true, .public = true, .static = true, },
-            .name = type_name,
-            .scope = .file,
-            .type = null, // infer / generate from decl
-            .value = file
-        }
-    };
+    const ir_parser = irgen.IrElevator.init(allocator);
+    const ir = try ir_parser.lowerType(type_name, file.type_decl);
+
     var context = try gen.CodegenContext.init(gpa, jdk_path);
-    const generated = context.inferType(&file_owner) catch |e| {
+    const generated = context.resolveType(&ir) catch |e| {
         std.debug.print("Error while generating type.\n", .{});
         return e;
     };
