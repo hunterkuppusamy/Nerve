@@ -1,0 +1,7 @@
+const var String = [import]("test/jdk/java/lang/String.class")
+const var System = [import]("test/jdk/java/lang/System.class")
+
+pub const static var main = fn (args: []String) -> void {
+  var str = "hellomayasworld";
+  System.out.println(str);
+}

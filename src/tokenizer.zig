@@ -143,12 +143,12 @@ pub const Tokenizer = struct {
 
         if (c == ' ') {
             self.position_col += 1;
-            try self.increment();
+            self.increment();
             return null;
         } else if (std.ascii.isWhitespace(c)) {
             // Is new line.
             self.position_row += 1;
-            try self.increment();
+            self.increment();
             self.is_commented = false;
             return null;
         }
@@ -156,7 +156,7 @@ pub const Tokenizer = struct {
         // Comment handling
         if (self.is_commented or (c == '/' and self.source[self.i + 1] == '/')) {
             self.is_commented = true;
-            try self.increment();
+            self.increment();
             return null;
         }
 
@@ -173,22 +173,14 @@ pub const Tokenizer = struct {
             self.lexSpecial();
     }
 
-    fn nextChar(self: *Self) !u8 {
-        try self.increment();
+    fn nextChar(self: *Self) Error!u8 {
+        self.i += 1;
+        if (self.i >= self.source.len) return Error.UnexpectedEndOfFile;
         return self.source[self.i];
     }
 
-    fn increment(self: *Self) !void {
+    fn increment(self: *Self) void {
         self.i += 1;
-        if (self.i >= self.source.len) {
-            self.diagnostics.err = .{
-                .error_type = error.EOF,
-                .error_line = self.position_row,
-                .error_column = self.position_col,
-                .error_message = "Unexpected end of file."
-            };
-            return Error.UnexpectedEndOfFile;
-        }
     }
 
     fn lexKeywordOrIdentifier(self: *Self) !Token {
@@ -447,6 +439,71 @@ test "lexing function body" {
 
     const expected = [_]TokenKind{
         .keyword_pub, .keyword_fn, .identifier, .open_paren, .identifier, .colon, .identifier, .close_paren, .right_arrow, .identifier, .open_brace, .keyword_return, .identifier, .period, .identifier, .open_paren, .close_paren, .semicolon, .close_brace };
-    // check token data here too?
     try expect(std.mem.eql(TokenKind, &kinds, &expected));
+}
+
+test "lexing keywords" {
+    var lexer = Tokenizer{ .allocator = std.testing.allocator, .source = "const var if else return static" };
+    const tokens = try lexer.tokenize();
+    defer std.testing.allocator.free(tokens);
+    try expect(tokens.len == 6);
+    try expect(tokens[0].kind == .keyword_const);
+    try expect(tokens[1].kind == .keyword_var);
+    try expect(tokens[2].kind == .keyword_if);
+    try expect(tokens[3].kind == .keyword_else);
+    try expect(tokens[4].kind == .keyword_return);
+    try expect(tokens[5].kind == .keyword_static);
+}
+
+test "lexing operators" {
+    var lexer = Tokenizer{ .allocator = std.testing.allocator, .source = "a + b - c * d" };
+    const tokens = try lexer.tokenize();
+    defer std.testing.allocator.free(tokens);
+    try expect(tokens.len == 7);
+    try expect(tokens[1].kind == .operator_add);
+    try expect(tokens[3].kind == .operator_sub);
+    try expect(tokens[5].kind == .operator_mul);
+}
+
+test "lexing arrow and brackets" {
+    var lexer = Tokenizer{ .allocator = std.testing.allocator, .source = "[]()->{}" };
+    const tokens = try lexer.tokenize();
+    defer std.testing.allocator.free(tokens);
+    try expect(tokens.len == 7);
+    try expect(tokens[0].kind == .open_bracket);
+    try expect(tokens[1].kind == .close_bracket);
+    try expect(tokens[2].kind == .open_paren);
+    try expect(tokens[3].kind == .close_paren);
+    try expect(tokens[4].kind == .right_arrow);
+    try expect(tokens[5].kind == .open_brace);
+    try expect(tokens[6].kind == .close_brace);
+}
+
+test "lexing import expression" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var lexer = Tokenizer{ .allocator = arena.allocator(), .source =
+        \\const var System = [import]("java/lang/System.class")
+    };
+    const tokens = try lexer.tokenize();
+    try expect(tokens.len == 10);
+    try expect(tokens[0].kind == .keyword_const);
+    try expect(tokens[1].kind == .keyword_var);
+    try expect(tokens[2].kind == .identifier);
+    try expect(tokens[3].kind == .equals);
+    try expect(tokens[4].kind == .open_bracket);
+    try expect(tokens[5].kind == .identifier);
+    try expect(tokens[6].kind == .close_bracket);
+    try expect(tokens[7].kind == .open_paren);
+    try expect(tokens[8].kind == .literal_string);
+    try expect(tokens[9].kind == .close_paren);
+}
+
+test "lexing negative integer" {
+    var lexer = Tokenizer{ .allocator = std.testing.allocator, .source = "-42;" };
+    const tokens = try lexer.tokenize();
+    defer std.testing.allocator.free(tokens);
+    try expect(tokens[0].kind == .operator_sub);
+    try expect(tokens[1].kind == .literal_integer);
+    try expect(tokens[1].data.integer == 42);
 }

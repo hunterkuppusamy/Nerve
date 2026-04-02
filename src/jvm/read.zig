@@ -230,7 +230,7 @@ fn readConstant(gpa: std.mem.Allocator, r: *std.Io.Reader) !Class.Constant {
     return .placeholder;
 }
 
-pub fn readClassFile(gpa: std.mem.Allocator, path: []const u8) !Class {
+pub fn readClassFile(gpa: std.mem.Allocator, path: []const u8) !*Class {
     const file = std.fs.cwd().openFile(path, .{ .mode = .read_only }) catch |e| {
         switch (e) {
             error.FileNotFound => {
@@ -244,8 +244,8 @@ pub fn readClassFile(gpa: std.mem.Allocator, path: []const u8) !Class {
     var buf: [2048]u8 = undefined;
     var reader = file.reader(&buf);
     const r = &reader.interface;
-    var class = Class{};
-    try readClass(gpa, r, &class);
+    const class = try gpa.create(Class);
+    try readClass(gpa, r, class);
     return class;
 }
 

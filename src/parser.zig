@@ -150,8 +150,10 @@ fn type_decl(self: *Parser, is_root: bool) !Node {
     const first = decl.lineinfo();
     try decls.append(self.allocator, decl);
 
-    while (self._i + 1 < self.tokens.len) {
-        if (!is_root and try self.peek() == .close_brace) break;
+    while (self._i < self.tokens.len) {
+        const next = try self.peek();
+        if (next == .semicolon) { _ = try self.consume(.semicolon); continue; }
+        if (!is_root and next == .close_brace) break;
         decl = try declaration(self);
         try decls.append(self.allocator, decl);
     }
@@ -675,7 +677,7 @@ test "const var" {
     defer arena.deinit();
     const node = try lexAndParse(alloc, "const var test = 1.0 * 2 + (3 - 4)");
 
-    const root_node = node.body.nodes[0];
+    const root_node = node.type_decl.fields[0];
     try expect(root_node == Node.@"var");
     const vnode = root_node.@"var";
 
@@ -746,4 +748,113 @@ test "parse function body" {
     try expect(return_statement == Node.@"return");
     const return_var_name = return_statement.@"return".?.field_access.name;
     try expect(std.mem.eql(u8, return_var_name, "SUCCESS"));
+}
+
+test "parse type declaration" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const node = try lexAndParse(alloc, "pub const var MyType = type { var x = 1\n var y = 2\n }");
+    const root_node = node.type_decl;
+    try expect(root_node.fields.len == 1);
+    const decl = root_node.fields[0].@"var";
+    try expect(std.mem.eql(u8, decl.name, "MyType"));
+    const inner = decl.value.type_decl;
+    try expect(inner.fields.len == 2);
+}
+
+test "parse field access" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const node = try lexAndParse(alloc, "pub var start = fn()->void { System.out.println(); }");
+    const root_node = node.type_decl;
+    const decl = root_node.fields[0].@"var";
+    const fun = decl.value.fn_decl;
+    const stmt = fun.body.body.nodes[0];
+    try expect(stmt == .fn_invoke);
+    try expect(std.mem.eql(u8, stmt.fn_invoke.name, "println"));
+}
+
+test "parse if statement" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const node = try lexAndParse(alloc, "pub var f = fn()->void { if (1) { return; } }");
+    const root_node = node.type_decl;
+    const decl = root_node.fields[0].@"var";
+    const fun = decl.value.fn_decl;
+    const stmt = fun.body.body.nodes[0];
+    try expect(stmt == .@"if");
+    try expect(stmt.@"if".condition.* == .integer);
+}
+
+test "parse multiple parameters" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const node = try lexAndParse(alloc, "pub var f = fn(a: int, b: float)->void { return; }");
+    const root_node = node.type_decl;
+    const decl = root_node.fields[0].@"var";
+    const fun = decl.value.fn_decl;
+    try expect(fun.params.len == 2);
+    try expect(std.mem.eql(u8, fun.params[0].name, "a"));
+    try expect(std.mem.eql(u8, fun.params[1].name, "b"));
+}
+
+test "parse return expression" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const node = try lexAndParse(alloc, "pub var f = fn()->int { return 42; }");
+    const root_node = node.type_decl;
+    const decl = root_node.fields[0].@"var";
+    const fun = decl.value.fn_decl;
+    const stmt = fun.body.body.nodes[0];
+    try expect(stmt == .@"return");
+    try expect(stmt.@"return".?.* == .integer);
+    try expect(stmt.@"return".?.integer.data == 42);
+}
+
+test "parse string literal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const node = try lexAndParse(alloc, "const var x = \"hello world\"");
+    const root_node = node.type_decl;
+    const decl = root_node.fields[0].@"var";
+    try expect(decl.value.* == .string);
+    try expect(std.mem.eql(u8, decl.value.string.data, "hello world"));
+}
+
+test "parse array type" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const node = try lexAndParse(alloc, "pub var f = fn(args: []String)->void { return; }");
+    const root_node = node.type_decl;
+    const decl = root_node.fields[0].@"var";
+    const fun = decl.value.fn_decl;
+    try expect(fun.params.len == 1);
+    try expect(fun.params[0].type.* == .array_of);
+}
+
+test "parse builtin invocation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const node = try lexAndParse(alloc, "const var S = [import](\"java/lang/String.class\")");
+    const root_node = node.type_decl;
+    const decl = root_node.fields[0].@"var";
+    try expect(decl.value.* == .fn_invoke);
+    try expect(decl.value.fn_invoke.builtin);
+    try expect(std.mem.eql(u8, decl.value.fn_invoke.name, "import"));
 }

@@ -1,0 +1,13 @@
+const var System = [import]("java/lang/System")
+const var String = [import]("java/lang/String")
+
+pub static const var main = fn(args: []String)->void {
+  var out = System.out;
+  var world = string();
+  out.println("Hello, " + world + "!");
+  return;
+}
+
+pub static const var string = fn () -> String {
+    return "World" + "2";
+}

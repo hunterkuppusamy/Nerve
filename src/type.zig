@@ -1,8 +1,6 @@
 const std = @import("std");
-const parser = @import("parser.zig");
 const Class = @import("jvm/format.zig").Class;
 const Node = @import("AST.zig").Node;
-const ProgramContext = @import("jvm/gen.zig").ProgramContext;
 
 pub const Type = union(enum) {
     // Primitives with no meta-data.
@@ -26,12 +24,12 @@ pub const Type = union(enum) {
             .void => "V",
 
             .@"fn" => "Ljava/lang/Function;",
-            .@"struct" => |str| try classToDesc(gpa, str.name),
-            .array => |a| try makeArray(gpa, try a.elements.jvmName(gpa)),
+            .@"struct" => |str| try classToDescriptor(gpa, str.name),
+            .array => |a| try makeArrayDescriptor(gpa, try a.elements.jvmName(gpa)),
         };
     }
 
-    fn makeArray(gpa: std.mem.Allocator, name: []const u8) ![]const u8 {
+    fn makeArrayDescriptor(gpa: std.mem.Allocator, name: []const u8) ![]const u8 {
         const len = name.len;
         const new = try gpa.alloc(u8, len + 1);
         @memcpy(new[1..new.len], name);
@@ -39,7 +37,7 @@ pub const Type = union(enum) {
         return new;
     }
 
-    fn classToDesc(gpa: std.mem.Allocator, path: []const u8) ![]const u8 {
+    fn classToDescriptor(gpa: std.mem.Allocator, path: []const u8) ![]const u8 {
         const len = path.len;
         const new = try gpa.alloc(u8, len + 2);
         @memcpy(new[1..(new.len - 1)], path);
@@ -59,6 +57,8 @@ pub const Type = union(enum) {
 
             name: []const u8,
             type: *const Type,
+
+            synthetic: bool = false,
         };
 
         pub fn fieldByName(self: *const Self, name: []const u8) ?Field {
@@ -94,3 +94,45 @@ pub const Type = union(enum) {
         params: []const Fn.Param,
     };
 };
+
+const expect = std.testing.expect;
+
+test "jvmName primitives" {
+    const int: Type = .int;
+    const float: Type = .float;
+    const long: Type = .long;
+    const double: Type = .double;
+    const void_t: Type = .void;
+    try expect(std.mem.eql(u8, try int.jvmName(std.testing.allocator), "I"));
+    try expect(std.mem.eql(u8, try float.jvmName(std.testing.allocator), "F"));
+    try expect(std.mem.eql(u8, try long.jvmName(std.testing.allocator), "J"));
+    try expect(std.mem.eql(u8, try double.jvmName(std.testing.allocator), "D"));
+    try expect(std.mem.eql(u8, try void_t.jvmName(std.testing.allocator), "V"));
+}
+
+test "jvmName struct" {
+    const t = Type{ .@"struct" = .{ .name = "java/lang/String", .fields = &.{} } };
+    const name = try t.jvmName(std.testing.allocator);
+    defer std.testing.allocator.free(name);
+    try expect(std.mem.eql(u8, name, "Ljava/lang/String;"));
+}
+
+test "jvmName array" {
+    const elem: Type = .int;
+    const int_array = Type{ .array = .{ .elements = &elem } };
+    const name = try int_array.jvmName(std.testing.allocator);
+    defer std.testing.allocator.free(name);
+    try expect(std.mem.eql(u8, name, "[I"));
+}
+
+test "fieldByName" {
+    const elem: Type = .int;
+    const field = Type.Struct.Field{
+        .access = .{},
+        .name = "value",
+        .type = &elem,
+    };
+    const s = Type.Struct{ .name = "Test", .fields = &.{field} };
+    try expect(s.fieldByName("value") != null);
+    try expect(s.fieldByName("missing") == null);
+}

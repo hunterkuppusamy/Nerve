@@ -46,14 +46,16 @@ fn termSize(file: std.fs.File) !?Size {
     };
 }
 
+const default_size = Size{ .x = 80, .y = 24 };
+
 pub fn size() Size {
     const file = switch (builtin.os.tag) {
         .linux => std.fs.openFileAbsolute("/dev/tty", .{ .mode = .read_write })
-            catch @panic("Cannot open '/dev/tty'."),
+            catch return default_size,
         else => std.fs.File.stdout(),
     };
-    if (!file.isTty()) return .{ .x = 50, .y = 50 };
-    return termSize(file) catch @panic("Could not get terminal size.") orelse .{ .x = 50, .y = 50};
+    if (!file.isTty()) return default_size;
+    return (termSize(file) catch return default_size) orelse default_size;
 }
 
 pub fn columns() usize {

@@ -637,7 +637,17 @@ pub const Op = struct {
         FADD = 0x62,
         DADD = 0x63,
         ISUB = 0x64,
-        // ... (many more arithmetic, shifts, etc.)
+        LSUB = 0x65,
+        FSUB = 0x66,
+        DSUB = 0x67,
+        IMUL = 0x68,
+        LMUL = 0x69,
+        FMUL = 0x6a,
+        DMUL = 0x6b,
+        IDIV = 0x6c,
+        LDIV = 0x6d,
+        FDIV = 0x6e,
+        DDIV = 0x6f,
 
         // Conversions
         I2L = 0x85,
@@ -752,6 +762,18 @@ pub const Op = struct {
             .LADD => .{ .mnemonic = "ladd", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
             .FADD => .{ .mnemonic = "fadd", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
             .DADD => .{ .mnemonic = "dadd", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
+            .ISUB => .{ .mnemonic = "isub", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
+            .LSUB => .{ .mnemonic = "lsub", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
+            .FSUB => .{ .mnemonic = "fsub", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
+            .DSUB => .{ .mnemonic = "dsub", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
+            .IMUL => .{ .mnemonic = "imul", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
+            .LMUL => .{ .mnemonic = "lmul", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
+            .FMUL => .{ .mnemonic = "fmul", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
+            .DMUL => .{ .mnemonic = "dmul", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
+            .IDIV => .{ .mnemonic = "idiv", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
+            .LDIV => .{ .mnemonic = "ldiv", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
+            .FDIV => .{ .mnemonic = "fdiv", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
+            .DDIV => .{ .mnemonic = "ddiv", .operand_form = .none, .stack_pop = 2, .stack_push = 1 },
 
             // Conversions
             .I2L => .{ .mnemonic = "i2l", .operand_form = .none, .stack_pop = 1, .stack_push = 1 },
