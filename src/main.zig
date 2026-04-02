@@ -87,6 +87,7 @@ pub fn main() !void {
         .output = out,
         .class_name = derived_name,
         .jdk_path = jdk_path,
+        .file_name = source_file orelse "<inline>",
     }) catch |e| {
         std.debug.print("error: compilation failed: {}\n", .{e});
         std.process.exit(1);

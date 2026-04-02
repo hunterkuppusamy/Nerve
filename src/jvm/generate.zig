@@ -19,6 +19,7 @@ pub fn generate(cctx: *ClassContext, struct_type: *const Type.Struct) !void {
     var methods_len: usize = 0;
     var fields_len: usize = 0;
     for (struct_type.fields) |field| {
+        if (field.synthetic) continue;
         if (field.type.* == .@"fn") methods_len += 1 else fields_len += 1;
     }
 
@@ -28,6 +29,7 @@ pub fn generate(cctx: *ClassContext, struct_type: *const Type.Struct) !void {
     cctx.class.methods = try gpa.alloc(Class.MethodInfo, methods_len);
 
     for (struct_type.fields) |field| {
+        if (field.synthetic) continue;
         std.debug.print("generate: Generating field {s}.\n", .{field.name});
         const name_h = try cctx.cpool.add_utf8(field.name);
 

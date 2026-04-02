@@ -1,8 +1,8 @@
 const std = @import("std");
 const root = @import("root.zig");
 const testing = std.testing;
-const Diagnostics = @import("root.zig").Diagnostics;
 const expect = testing.expect;
+const NotificationList = @import("notification.zig").NotificationList;
 
 pub const Token = struct {
     source_data: SourceData,
@@ -71,7 +71,7 @@ pub const TokenKind = enum(u8) {
     keyword_type, // declare type
 
     keyword_if,
-    keyword_elif,
+    keyword_elseif,
     keyword_else,
     // keyword_switch
 
@@ -106,8 +106,8 @@ pub const Tokenizer = struct {
     i: usize = 0,
     position_row: usize = 1,
     position_col: usize = 1,
-    diagnostics: Diagnostics = .{},
     is_commented: bool = false,
+    notifications: ?*NotificationList = null,
 
     // Testing
     initial_token_size: usize = 16,
@@ -192,6 +192,20 @@ pub const Tokenizer = struct {
 
         const str = self.source[start_i..self.i];
 
+        if (std.mem.eql(u8, str, "false")) {
+            return .{
+                .source_data = self.currentSourceData(),
+                .kind = .literal_bool,
+                .data = .{ .bool = false }
+            };
+        } else if (std.mem.eql(u8, str, "true")) {
+            return .{
+                .source_data = self.currentSourceData(),
+                .kind = .literal_bool,
+                .data = .{ .bool = true }
+            };
+        }
+
         const keyword = checkIdentIsKeyword(str);
         if (keyword == null) return .{
             .kind = .identifier,
@@ -212,7 +226,7 @@ pub const Tokenizer = struct {
     }
 
     /// Return the keyword if true
-    fn checkIdentIsKeyword(buf: root.STRING) ?TokenKind {
+    fn checkIdentIsKeyword(buf: []const u8) ?TokenKind {
         const keywords = comptime select: {
             var keyword_slice = [_]TokenKind{ undefined } ** @typeInfo(TokenKind).@"enum".fields.len;
             var i: usize = 0;
@@ -251,15 +265,11 @@ pub const Tokenizer = struct {
         const str = self.source[start_i..self.i];
 
         if (decimals > 1) {
-            std.debug.print("lexLiteralNumber: Invalid number of decimals {}\n", .{decimals});
-            self.diagnostics.err = .{
-                .error_type = error.InvalidCharacter,
-                .error_line = self.position_row,
-                .error_column = self.position_col,
-                .data = .{
-                    .i = decimals
-                }
-            };
+            if (self.notifications) |n| n.err(
+                .{ .line = self.position_row, .column = self.position_col },
+                "invalid number literal: too many decimal points",
+                .{},
+            );
             return error.InvalidCharacter;
         } else if (decimals == 1) {
             const f = try std.fmt.parseFloat(root.FLOAT, str);
@@ -361,13 +371,11 @@ pub const Tokenizer = struct {
                 else break :arrow .operator_sub;
             },
             else => {
-                self.diagnostics.err = .{
-                    .error_type = error.UnknownSpecialCharacter,
-                    .error_line = self.position_row,
-                    .error_column = self.position_col,
-                    .error_message = "Reached unknown special character"
-                };
-                std.debug.print("Unknown special char '{c}'\n", .{ c });
+                if (self.notifications) |n| n.err(
+                    .{ .line = self.position_row, .column = self.position_col },
+                    "unexpected character '{c}'",
+                    .{c},
+                );
                 return error.UnknownSpecialCharacter;
             },
         };

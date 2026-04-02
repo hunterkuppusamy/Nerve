@@ -27,6 +27,7 @@ test {
     _ = @import("jvm/read.zig");
     _ = @import("jvm/write.zig");
     _ = @import("type.zig");
+    _ = @import("notification.zig");
 }
 
 test "compile hello world" {
@@ -69,6 +70,38 @@ test "compile static functions" {
     try compile(source, .{ .output = "test/out/StaticFunctions.class", .class_name = "StaticFunctions" });
 }
 
+test "compile if statement" {
+    const source =
+        \\const var String = [import]("java/lang/String")
+        \\const var System = [import]("java/lang/System")
+        \\pub static const var main = fn(args: []String)->void {
+        \\  var out = System.out;
+        \\  if (1) {
+        \\    out.println("true branch");
+        \\  }
+        \\  return;
+        \\}
+        ;
+    try compile(source, .{ .output = "test/out/IfStatement.class", .class_name = "IfStatement" });
+}
+
+test "compile if-else statement" {
+    const source =
+        \\const var String = [import]("java/lang/String")
+        \\const var System = [import]("java/lang/System")
+        \\pub static const var main = fn(args: []String)->void {
+        \\  var out = System.out;
+        \\  if (1) {
+        \\    out.println("yes");
+        \\  } else {
+        \\    out.println("no");
+        \\  }
+        \\  return;
+        \\}
+        ;
+    try compile(source, .{ .output = "test/out/IfElse.class", .class_name = "IfElse" });
+}
+
 pub const std_options = std.Options{
     .fmt_max_depth = 1000,
 };
@@ -76,25 +109,13 @@ pub const std_options = std.Options{
 pub const STRING = []const u8;
 pub const HEAP_STRING = *const [256:0]u8;
 
-pub const Diagnostics = struct {
-    err: ?struct {
-        error_type: anyerror,
-        error_line: usize = undefined,
-        error_column: usize = undefined,
-        error_message: ?[*:0]const u8 = null,
-        message_is_allocated: bool = false,
-        data: ?union(enum) {
-            token_data: lexer.TokenData,
-            i: i32,
-            u: usize,
-        } = null,
-    } = null,
-};
+pub const Notification = @import("notification.zig");
 
 pub const CompileOptions = struct {
     output: []const u8 = "out/Main.class",
     class_name: []const u8 = "Main",
     jdk_path: []const u8 = "test/jdk",
+    file_name: []const u8 = "<input>",
 };
 
 pub fn compile(source: []const u8, options: CompileOptions) !void {
@@ -105,13 +126,25 @@ pub fn compile(source: []const u8, options: CompileOptions) !void {
 }
 
 pub fn compileWithAllocator(gpa: std.mem.Allocator, source: []const u8, options: CompileOptions) !void {
+    var notifications = try Notification.NotificationList.init(gpa, source);
+
     var tokenizer = lexer.Tokenizer.init(gpa, source);
-    const tokens = try tokenizer.tokenize();
+    tokenizer.notifications = &notifications;
+    const tokens = tokenizer.tokenize() catch {
+        notifications.dump(options.file_name);
+        return error.CompilationFailed;
+    };
+
     var tokenParser = parser.Parser.init(gpa, tokens, source);
-    const file = try tokenParser.parse();
+    tokenParser.notifications = &notifications;
+    const file = tokenParser.parse() catch {
+        notifications.dump(options.file_name);
+        return error.CompilationFailed;
+    };
+
     const file_owner = Node{
         .@"var" = .{
-            .loc = .{ .line = 0, .src_start_ndx = 0, .src_end_ndx = 0 },
+            .loc = .{},
             .mods = .{ .constant = true, .public = true, .static = true },
             .name = options.class_name,
             .scope = .file,
@@ -121,19 +154,35 @@ pub fn compileWithAllocator(gpa: std.mem.Allocator, source: []const u8, options:
     };
 
     var global = try gen.GlobalContext.init(gpa, options.jdk_path);
+    global.notifications = &notifications;
     var file_ctx = try gen.FileContext.init(&global);
     var class_ctx = try gen.ClassContext.init(&file_ctx, options.class_name);
 
-    // Type inference runs in a temporary FunctionContext (no bytecode emitted)
     var infer_fctx = try gen.FunctionContext.init(&class_ctx);
     defer infer_fctx.deinit();
-    const generated = try infer_fctx.inferType(&file_owner);
+    const generated = infer_fctx.inferType(&file_owner) catch |e| {
+        notifications.err(.{}, "type inference failed: {s}", .{@errorName(e)});
+        notifications.dump(options.file_name);
+        return error.CompilationFailed;
+    };
 
     switch (generated.*) {
         .@"struct" => |*str| {
-            try gen.generate(&class_ctx, str);
+            gen.generate(&class_ctx, str) catch |e| {
+                notifications.err(.{}, "code generation failed: {s}", .{@errorName(e)});
+                notifications.dump(options.file_name);
+                return error.CompilationFailed;
+            };
             try write.writeClassFile(options.output, class_ctx.class);
         },
-        else => return error.CannotGenerateClassOfNonStructType,
+        else => {
+            notifications.err(.{}, "cannot generate a class file for a non-struct type", .{});
+            notifications.dump(options.file_name);
+            return error.CompilationFailed;
+        },
+    }
+
+    if (notifications.items.items.len > 0) {
+        notifications.dump(options.file_name);
     }
 }

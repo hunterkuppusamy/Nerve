@@ -9,6 +9,9 @@ const ConstantPool = @import("../ConstantPool.zig");
 const disasm = @import("disasm.zig");
 const import = @import("import.zig");
 const infer = @import("infer.zig");
+const Notification = @import("../notification.zig");
+const NotificationList = Notification.NotificationList;
+pub const Location = Notification.Location;
 
 pub const Primitive = enum {
     int, float, long, double,
@@ -37,6 +40,8 @@ pub const GlobalContext = struct {
     allocator: std.mem.Allocator,
     jdk_path: []const u8,
     imported: std.StringHashMap(*Type),
+    notifications: ?*NotificationList = null,
+    source: []const u8 = "",
 
     pub fn init(gpa: std.mem.Allocator, jdk_path: []const u8) !GlobalContext {
         var self = GlobalContext{
@@ -46,6 +51,10 @@ pub const GlobalContext = struct {
         };
         try import.prepImports(&self);
         return self;
+    }
+
+    pub fn report(self: *GlobalContext, loc: Location, comptime fmt: []const u8, args: anytype) void {
+        if (self.notifications) |n| n.err(loc, fmt, args);
     }
 
     pub fn getImport(self: *GlobalContext, path: []const u8) ?*Type {
@@ -222,9 +231,12 @@ pub const FunctionContext = struct {
         try self.op_stack.push(.object);
     }
 
-    // Convenience: reach through to parent contexts
     pub fn inferType(self: *FunctionContext, node: *const Node) infer.InferError!*const Type {
         return infer.inferType(self, node);
+    }
+
+    pub fn report(self: *FunctionContext, loc: Location, comptime fmt: []const u8, args: anytype) void {
+        self.class.file.global.report(loc, fmt, args);
     }
 };
 

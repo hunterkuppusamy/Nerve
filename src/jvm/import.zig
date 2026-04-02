@@ -41,7 +41,10 @@ pub fn importClassName(global: *GlobalContext, class_name: []const u8) ImportErr
 
 pub fn importDescriptor(global: *GlobalContext, descriptor: []const u8, ignore_prefix: bool) ImportError!*const Type {
     const gpa = global.allocator;
-    if (descriptor.len == 0) return ImportError.Unexpected;
+    if (descriptor.len == 0) {
+        global.report(.{}, "empty type descriptor", .{});
+        return ImportError.Unexpected;
+    }
 
     return switch (descriptor[0]) {
         'I' => &@as(Type, Type.int),
@@ -51,11 +54,7 @@ pub fn importDescriptor(global: *GlobalContext, descriptor: []const u8, ignore_p
         'V' => &@as(Type, Type.void),
         'B', 'Z', 'S', 'C' => &@as(Type, Type.int),
         '[' => blk: {
-            const element_type = importDescriptor(global, descriptor[1..], false) catch |e| {
-                if (e == ImportError.Unexpected)
-                    std.debug.print("Error while importing descriptor '{s}'.\n", .{descriptor[1..]});
-                return e;
-            };
+            const element_type = importDescriptor(global, descriptor[1..], false) catch |e| return e;
             const temp = try gpa.create(Type);
             temp.* = .{ .array = .{ .elements = element_type } };
             break :blk temp;
@@ -64,7 +63,7 @@ pub fn importDescriptor(global: *GlobalContext, descriptor: []const u8, ignore_p
         else => if (ignore_prefix)
             importClassName(global, descriptor)
         else {
-            std.debug.print("Cannot import {s}: invalid descriptor.\n", .{descriptor});
+            global.report(.{}, "invalid type descriptor '{s}'", .{descriptor});
             return ImportError.Unexpected;
         },
     };

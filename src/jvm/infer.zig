@@ -38,6 +38,8 @@ pub fn inferType(fctx: *FunctionContext, node: *const Node) InferError!*const Ty
         .fn_decl => |n| return inferFnDecl(fctx, n),
         .fn_invoke => |n| return inferFnInvoke(fctx, file, global, n),
         .field_access => |n| return inferFieldAccess(fctx, file, n),
+        .@"if" => return &@as(Type, Type.void),
+        .body => return &@as(Type, Type.void),
         .string => return global.getImport("java/lang/String").?,
         .binary_op => |n| {
             const lhs_type = try inferType(fctx, n.lhs);
@@ -53,7 +55,7 @@ pub fn inferType(fctx: *FunctionContext, node: *const Node) InferError!*const Ty
         },
         else => {},
     }
-    std.debug.print("Cannot infer type of {any}.\n", .{node});
+    fctx.report(node.location(), "cannot infer type of '{s}' expression", .{@tagName(node.*)});
     return error.CannotInferType;
 }
 
@@ -73,12 +75,14 @@ fn inferTypeDecl(fctx: *FunctionContext, file: *FileContext, n: Node.TypeDecl) I
         else
             try inferType(fctx, decl.value);
 
-        std.debug.print("Adding static {s} to context.\n", .{decl.name});
+        const is_synthetic = decl.value.* == .fn_invoke and decl.value.fn_invoke.builtin;
+
         try file.putStatic(decl.name, type_ptr);
         try fields.append(gpa, .{
             .access = flags,
             .name = decl.name,
             .type = type_ptr,
+            .synthetic = is_synthetic,
         });
     }
 
@@ -119,10 +123,13 @@ fn inferFnInvoke(fctx: *FunctionContext, file: *FileContext, global: *ctx.Global
             return switch (fctx.op_stack.peek() orelse return &@as(Type, Type.void)) {
                 .int => &@as(Type, Type.int),
                 .float => &@as(Type, Type.float),
-                else => error.CannotInferType,
+                else => {
+                    fctx.report(n.loc, "cannot infer type of 'asm' result", .{});
+                    return error.CannotInferType;
+                },
             };
         }
-        std.debug.print("Unknown builtin '{s}'.\n", .{n.name});
+        fctx.report(n.loc, "unknown builtin '{s}'", .{n.name});
         return error.CannotInferType;
     }
     if (n.instance) |this| {
@@ -130,15 +137,17 @@ fn inferFnInvoke(fctx: *FunctionContext, file: *FileContext, global: *ctx.Global
         for (this_type.fields) |f| {
             if (std.mem.eql(u8, f.name, n.name)) return f.type.@"fn".return_type;
         }
-        std.debug.print("Could not find field '{s}' in type '{s}'.\n", .{ n.name, this_type.name });
+        fctx.report(n.loc, "no method '{s}' on type '{s}'", .{ n.name, this_type.name });
         return error.NoSuchFunction;
     } else {
         const typ = if (fctx.getLocal(n.name)) |l|
             l.type
         else if (file.getStatic(n.name)) |d|
             d.type
-        else
+        else {
+            fctx.report(n.loc, "undefined function or variable '{s}'", .{n.name});
             return error.CannotInferType;
+        };
         return switch (typ.*) {
             .@"fn" => |f| f.return_type,
             else => typ,
@@ -152,14 +161,14 @@ fn inferFieldAccess(fctx: *FunctionContext, file: *FileContext, n: Node.FieldAcc
         for (this_type.fields) |f| {
             if (std.mem.eql(u8, f.name, n.name)) return f.type;
         }
-        std.debug.print("Could not find field '{s}' in type '{s}'.\n", .{ n.name, this_type.name });
+        fctx.report(n.loc, "no field '{s}' on type '{s}'", .{ n.name, this_type.name });
         return error.CannotInferType;
     } else if (fctx.getLocal(n.name)) |l| {
         return l.type;
     } else if (file.getStatic(n.name)) |d| {
         return d.type;
     } else {
-        std.debug.print("Could not find local or static field '{s}'.\n", .{n.name});
+        fctx.report(n.loc, "undefined variable '{s}'", .{n.name});
         return error.CannotInferType;
     }
 }

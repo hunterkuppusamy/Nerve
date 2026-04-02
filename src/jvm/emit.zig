@@ -54,8 +54,10 @@ fn emitNode(fctx: *FunctionContext, node: Node) EmitError!void {
             try fctx.pushConstant(i);
         },
         .binary_op => |n| try emitBinaryOp(fctx, gpa, node, n),
+        .@"if" => |n| try emitIf(fctx, gpa, n),
+        .body => |n| try bytecodeOf(fctx, n.nodes),
         else => {
-            std.debug.print("Unhandled node {any}\n", .{node});
+            fctx.report(.{}, "unsupported expression in bytecode: '{s}'", .{@tagName(node)});
             return error.UnhandledNode;
         },
     }
@@ -63,8 +65,14 @@ fn emitNode(fctx: *FunctionContext, node: Node) EmitError!void {
 
 fn emitVar(fctx: *FunctionContext, n: Node.VarDecl) EmitError!void {
     std.debug.print("Varname = '{s}'\n", .{n.name});
+    const is_synthetic = n.value.* == .fn_invoke and n.value.fn_invoke.builtin;
+    const typ = try fctx.inferType(n.value);
+    if (is_synthetic) {
+        _ = try fctx.getOrCreateLocal(n.name, typ);
+        return;
+    }
     try emitNode(fctx, n.value.*);
-    const local = try fctx.getOrCreateLocal(n.name, try fctx.inferType(n.value));
+    const local = try fctx.getOrCreateLocal(n.name, typ);
     switch (local.type.*) {
         .int => try fctx.writeOp(Op.Code.ISTORE, local.index),
         .float => try fctx.writeOp(Op.Code.FSTORE, local.index),
@@ -77,7 +85,10 @@ fn emitFieldAccess(fctx: *FunctionContext, n: Node.FieldAccess) EmitError!void {
     if (n.instance) |instance| {
         const inferred_type = (try fctx.inferType(instance)).@"struct";
         try emitNode(fctx, instance.*);
-        const field = inferred_type.fieldByName(n.name) orelse return error.NoSuchField;
+        const field = inferred_type.fieldByName(n.name) orelse {
+            fctx.report(.{}, "no field '{s}' on type '{s}'", .{ n.name, inferred_type.name });
+            return error.NoSuchField;
+        };
         const field_ref = try fctx.class.cpool.add_field_ref(
             inferred_type.name,
             n.name,
@@ -96,7 +107,7 @@ fn emitFieldAccess(fctx: *FunctionContext, n: Node.FieldAccess) EmitError!void {
         } else if (fctx.class.file.getStatic(n.name)) |_| {
             // TODO: emit GETSTATIC for file-level statics
         } else {
-            std.debug.print("Unknown variable '{s}'.\n", .{n.name});
+            fctx.report(.{}, "undefined variable '{s}'", .{n.name});
             return error.UnknownVariable;
         }
     }
@@ -108,12 +119,56 @@ fn emitReturn(fctx: *FunctionContext, n: ?*Node) EmitError!void {
         return;
     }
     try emitNode(fctx, n.?.*);
-    switch (fctx.op_stack.peek() orelse return error.NothingToReturn) {
+    switch (fctx.op_stack.peek() orelse {
+        fctx.report(.{}, "return with value but nothing on the operand stack", .{});
+        return error.NothingToReturn;
+    }) {
         .int => try fctx.writeOp(.IRETURN, 0),
         .float => try fctx.writeOp(.FRETURN, 0),
         .long => try fctx.writeOp(.RETURN, 0),
         else => try fctx.writeOp(.ARETURN, 0),
     }
+}
+
+fn emitIf(fctx: *FunctionContext, gpa: std.mem.Allocator, n: Node.If) EmitError!void {
+    // Emit condition — leaves an int on the stack
+    try emitNode(fctx, n.condition.*);
+    _ = fctx.op_stack.pop();
+
+    // Emit true branch into a temporary buffer so we know its size
+    const true_code = try emitToBuffer(fctx, gpa, n.branch_true.*);
+    defer gpa.free(true_code);
+
+    if (n.branch_false) |false_branch| {
+        const false_code = try emitToBuffer(fctx, gpa, false_branch.*);
+        defer gpa.free(false_code);
+
+        // IFEQ over true body + GOTO at end of true body
+        // IFEQ offset = true_code.len + 3 (size of the GOTO instruction)
+        try fctx.writeOp(.IFEQ, @as(i16, @intCast(true_code.len + 3 + 3)));
+        try fctx.bytecode.writer.writeAll(true_code);
+
+        // GOTO over false body
+        try fctx.writeOp(.GOTO, @as(i16, @intCast(false_code.len + 3)));
+        try fctx.bytecode.writer.writeAll(false_code);
+    } else {
+        // No else branch — IFEQ jumps past true body
+        try fctx.writeOp(.IFEQ, @as(i16, @intCast(true_code.len + 3)));
+        try fctx.bytecode.writer.writeAll(true_code);
+    }
+}
+
+// Emit a node into a temporary bytecode buffer, then restore the main stream.
+// Locals and op_stack are shared — only the bytecode writer is swapped.
+fn emitToBuffer(fctx: *FunctionContext, gpa: std.mem.Allocator, node: Node) EmitError![]const u8 {
+    const saved = fctx.bytecode;
+    fctx.bytecode = std.Io.Writer.Allocating.init(gpa);
+    defer {
+        fctx.bytecode.deinit();
+        fctx.bytecode = saved;
+    }
+    try emitNode(fctx, node);
+    return try fctx.bytecode.toOwnedSlice();
 }
 
 fn emitFnInvoke(fctx: *FunctionContext, n: Node.FnInvoke) EmitError!void {
@@ -141,7 +196,10 @@ fn emitInstanceCall(fctx: *FunctionContext, instance: *const Node, name: []const
         std.debug.print("Selected function {s}:{s}\n", .{ inferred_struct.name, f.name });
         return_type = function.return_type;
     }
-    if (return_type == null) return error.FieldNotFound;
+    if (return_type == null) {
+        fctx.report(.{}, "no matching method '{s}' on type '{s}' for {d} argument(s)", .{ name, inferred_struct.name, args.len });
+        return error.FieldNotFound;
+    }
 
     const method_ref = try fctx.class.cpool.add_method_ref(
         inferred_struct.name,
@@ -164,7 +222,10 @@ fn emitStaticCall(fctx: *FunctionContext, name: []const u8, args: []const Node) 
             return_type = f.type.@"fn".return_type;
         }
     }
-    if (return_type == null) return error.NoSuchFunction;
+    if (return_type == null) {
+        fctx.report(.{}, "undefined static function '{s}'", .{name});
+        return error.NoSuchFunction;
+    }
 
     const method_ref = try fctx.class.cpool.add_method_ref(
         fctx.class.name,
@@ -275,11 +336,20 @@ fn emitBuiltin(fctx: *FunctionContext, name: []const u8, args: []Node) EmitError
             .string => |str| code = getCode(str.data),
             .integer => |i| try fctx.writeOp(code, i.data),
             .byte => |c| try fctx.writeOp(code, c.data),
-            else => return error.UnexpectedType,
+            else => {
+                fctx.report(.{}, "unexpected argument type '{s}' in asm builtin", .{@tagName(arg)});
+                return error.UnexpectedType;
+            },
         };
     } else {
+        fctx.report(.{}, "undefined builtin '{s}'", .{name});
         return error.UndefinedBuiltin;
     }
+}
+
+fn unsupportedOp(fctx: *FunctionContext, op: Node.BinaryOp.Op, type_name: []const u8) EmitError {
+    fctx.report(.{}, "operator '{s}' not supported on type '{s}'", .{ @tagName(op), type_name });
+    return error.UnsupportedBinaryOp;
 }
 
 fn createMethodDesc(fctx: *FunctionContext, args: []const Node, ret: *const Type) EmitError![]const u8 {

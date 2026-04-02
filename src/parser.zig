@@ -3,9 +3,9 @@ const lexer = @import("tokenizer.zig");
 const root = @import("root.zig");
 const AST = @import("AST.zig");
 const Node = AST.Node;
-const LineInfo = Node.LineInfo;
+const Location = @import("notification.zig").Location;
+const NotificationList = @import("notification.zig").NotificationList;
 const expect = std.testing.expect;
-const Diagnostics = root.Diagnostics;
 const TokenKind = lexer.TokenKind;
 const TokenData = lexer.TokenData;
 const Token = lexer.Token;
@@ -19,7 +19,7 @@ pub const Parser = struct {
 
     // State
     _i: usize = 0,
-    diagnostics: Diagnostics = .{},
+    notifications: ?*NotificationList = null,
 
     pub fn init(allocator: std.mem.Allocator, tokens: []Token, source: []const u8) Parser {
         return Parser {
@@ -39,35 +39,24 @@ pub const Parser = struct {
     }
 
     fn consume(self: *Parser, kind: TokenKind) !Token {
-        if (self._i >= self.tokens.len) return Error.UnexpectedEndOfFile;
+        if (self._i >= self.tokens.len) {
+            self.reportError("unexpected end of file, expected '{s}'", .{@tagName(kind)});
+            return Error.UnexpectedEndOfFile;
+        }
         const token = self.tokens[self._i];
         std.log.info("Try consume '{s}'", .{@tagName(kind)});
         if (token.kind == kind) {
             self._i += 1;
             return token;
         } else {
-            self.diagnostics.err = .{ .error_type = Error.UnexpectedToken, .data = .{ .u = @intFromEnum(kind) } };
+            self.reportErrorAtToken(token, "expected '{s}', got '{s}'", .{ @tagName(kind), @tagName(token.kind) });
             return error.UnexpectedToken;
         }
     }
 
     pub fn parse(self: *Parser) !*Node {
         self._i = 0;
-
-        const ret = type_decl(self, true) catch |e| {
-            switch (e) {
-                error.UnexpectedToken => try generalUnexpectedToken(self),
-                error.ExpectedStartOfStatement => try iWantedThingHere(self, "start of statement"),
-                else => {
-                    const diags = self.diagnostics.err;
-                    if (diags != null) {
-                        std.debug.print("Parsing error ({s}): {s}", .{ @errorName(diags.?.error_type), diags.?.error_message.? });
-                    }
-                },
-            }
-            return e;
-        };
-
+        const ret = type_decl(self, true) catch |e| return e;
         return self.alloc(ret);
     }
 
@@ -82,6 +71,23 @@ pub const Parser = struct {
         return ptr;
     }
 
+    fn reportError(self: *Parser, comptime fmt: []const u8, args: anytype) void {
+        if (self.notifications) |n| {
+            std.debug.print("i = {d}, len = {d}\n", .{ self._i, self.tokens.len });
+            const loc = if (self._i < self.tokens.len)
+                tokenLoc(self.tokens[self._i])
+            else if (self.tokens.len > 0)
+                tokenLoc(self.tokens[self.tokens.len - 1])
+            else
+                Location{};
+            n.err(loc, fmt, args);
+        }
+    }
+
+    fn reportErrorAtToken(self: *Parser, token: Token, comptime fmt: []const u8, args: anytype) void {
+        if (self.notifications) |n| n.err(tokenLoc(token), fmt, args);
+    }
+
     pub const Error = error{
         UnexpectedToken,
         UnexpectedEndOfFile,
@@ -89,65 +95,18 @@ pub const Parser = struct {
     };
 };
 
-fn generalUnexpectedToken(self: *Parser) !void {
-    if (self.diagnostics.err == null) {
-        try iWantedThingHere(self, "The correct token.");
-        return;
-    }
-    const kind = @as(TokenKind, @enumFromInt(self.diagnostics.err.?.data.?.u));
-    try iWantedThingHere(self, @tagName(kind));
-}
-
-fn iWantedThingHere(self: *Parser, thing: []const u8) !void {
-    const token = self.tokens[self._i];
-    std.log.err("Expected '{s}', but got '{s}'\n", .{ thing, @tagName(token.kind) });
-    const back_dist = 3;
-    const forward_dist = 3;
-    const min = if (self._i < back_dist) self._i else self._i - back_dist;
-    const max = if (self.tokens.len < forward_dist) self.tokens.len - 1 else self._i + forward_dist + 1;
-    for (self.tokens[min..max], 0..) |tok, i| {
-        if (min + i == self._i) {
-            std.log.err("// Wanted '{s}' here.", .{ thing });
-            std.log.err("---> {s} <---, ", .{@tagName(tok.kind)});
-        } else std.log.err("{s}, ", .{@tagName(tok.kind)});
-    }
-    const first_token = self.tokens[min - 1];
-    const start_source_offset = first_token.source_data.index;
-    const last_token = self.tokens[max];
-    const last_source_offset = last_token.source_data.index;
-    std.debug.print("=--\n", .{});
-
-    try writeSource(self.source[start_source_offset..last_source_offset], first_token.source_data.line);
-    std.debug.print("=--\n", .{});
-}
-
-fn writeSource(source: []const u8, line_start: usize) !void {
-    var buf: [64]u8 = undefined;
-    const w = std.debug.lockStderrWriter(&buf);
-    defer std.debug.unlockStderrWriter();
-
-    var line = line_start + 1;
-    try w.print("{any: >3}: ", .{line - 1});
-    for (source) |c| {
-        try w.printAsciiChar(c, .{});
-
-        if (std.ascii.isWhitespace(c) and c != ' ') {
-            try w.print("{any: >3}: ", .{line});
-            line += 1;
-        }
-    }
-
-    try w.writeByte('\n');
+fn tokenLoc(token: Token) Location {
+    return .{ .line = token.source_data.line, .column = token.source_data.column };
 }
 
 /// The first function invoked for parsing.
 fn type_decl(self: *Parser, is_root: bool) !Node {
     if (!is_root and try self.peek() == .close_brace)
-        return Node { .type_decl = .{ .loc = LineInfo{}, .fields = &.{} } };
+        return Node { .type_decl = .{ .loc = Location{}, .fields = &.{} } };
 
     var decls = try std.ArrayList(Node).initCapacity(self.allocator, 4);
     var decl = try declaration(self);
-    const first = decl.lineinfo();
+    const first_loc = decl.location();
     try decls.append(self.allocator, decl);
 
     while (self._i < self.tokens.len) {
@@ -158,16 +117,10 @@ fn type_decl(self: *Parser, is_root: bool) !Node {
         try decls.append(self.allocator, decl);
     }
 
-    return Node {
-        .type_decl = .{
-            .loc = .{
-                .line = first.line,
-                .src_start_ndx = first.src_start_ndx,
-                .src_end_ndx = decl.lineinfo().src_end_ndx,
-            },
-            .fields = try decls.toOwnedSlice(self.allocator)
-        }
-    };
+    return .{ .type_decl = .{
+        .loc = first_loc,
+        .fields = try decls.toOwnedSlice(self.allocator),
+    } };
 }
 
 /// Parses declarations (fields) inside a type.
@@ -182,7 +135,7 @@ fn declaration(self: *Parser) !Node {
             return try variable(self, .file);
         },
         else => {
-            std.debug.print("Unhandled declaration token {s}.\n", .{ @tagName(p) });
+            self.reportError("expected declaration, got '{s}'", .{@tagName(p)});
             return error.UnexpectedToken;
         }
     }
@@ -209,9 +162,8 @@ fn statement(self: *Parser) !Node {
             return try if_statement(self);
         },
         else => {
-            std.log.err("Expected start of statement, got '{s}'.", .{@tagName(p)});
+            self.reportError("expected start of statement, got '{s}'", .{@tagName(p)});
             return Parser.Error.ExpectedStartOfStatement;
-            // return try expr(self);
         },
     }
 
@@ -224,19 +176,24 @@ fn variable(self: *Parser, scope: Node.VarDecl.Scope) !Node {
     var static = false;
     // Does not allow duplicate modifiers.
     while (true) {
-        switch (try self.peek()) {
+        switch (self.peek() catch {
+            self.reportError("unexpected end of file in declaration", .{});
+            return Parser.Error.UnexpectedEndOfFile;
+        }) {
             .keyword_const => {
-                if (constant) return error.UnexpectedToken;
+                if (constant) { self.reportError("duplicate 'const' modifier", .{}); return error.UnexpectedToken; }
                 _ = try self.consume(.keyword_const);
                 constant = true;
             },
             .keyword_pub => {
-                if (scope == .local or public) return error.UnexpectedToken;
+                if (scope == .local) { self.reportError("'pub' is not allowed on local variables", .{}); return error.UnexpectedToken; }
+                if (public) { self.reportError("duplicate 'pub' modifier", .{}); return error.UnexpectedToken; }
                 _ = try self.consume(.keyword_pub);
                 public = true;
             },
             .keyword_static => {
-                if (scope == .local or static) return error.UnexpectedToken;
+                if (scope == .local) { self.reportError("'static' is not allowed on local variables", .{}); return error.UnexpectedToken; }
+                if (static) { self.reportError("duplicate 'static' modifier", .{}); return error.UnexpectedToken; }
                 _ = try self.consume(.keyword_static);
                 static = true;
             },
@@ -246,18 +203,17 @@ fn variable(self: *Parser, scope: Node.VarDecl.Scope) !Node {
     const var_token = try self.consume(.keyword_var);
     const name = try self.consume(.identifier);
     var typ: ?*Node = null;
-    if (try self.peek() == .colon) {
+    if ((self.peek() catch {
+        self.reportErrorAtToken(name, "incomplete declaration for '{s}'", .{name.data.string.slice});
+        return Parser.Error.UnexpectedEndOfFile;
+    }) == .colon) {
         _ = try self.consume(.colon);
         typ = try self.doAlloc(expression);
     }
     _ = try self.consume(.equals);
     const e = try self.doAlloc(expression);
     return .{ .@"var" = .{
-        .loc = LineInfo {
-            .line = var_token.source_data.line,
-            .src_start_ndx = var_token.source_data.index,
-            .src_end_ndx = 0 -| -1
-        },
+        .loc = tokenLoc(var_token),
         .mods = .{
             .constant = constant,
             .public = public,
@@ -284,46 +240,31 @@ fn object_invoke_or_field_access(self: *Parser, instance: ?*Node) anyerror!Node 
     if (try self.peek() == .open_paren) is_func = true;
 
     if (!is_func and builtin) {
-        self.diagnostics.err = .{
-            .error_message = "Builtin cannot be field.",
-            .error_type = error.IllegalExpression,
-        };
+        self.reportError("builtin cannot be used as a field", .{});
         return error.IllegalExpression;
-    } else if (!is_func) return Node {
-        .field_access = .{
-            .loc = Node.LineInfo {
-                .line = name.source_data.line,
-                .src_start_ndx = name.source_data.index,
-                .src_end_ndx = name.source_data.index + name.data.string.slice.len,
-            },
-            .builtin = false,
-            .instance = instance,
-            .name = name.data.string.slice,
-        }
-    };
+    } else if (!is_func) return .{ .field_access = .{
+        .loc = tokenLoc(name),
+        .builtin = false,
+        .instance = instance,
+        .name = name.data.string.slice,
+    } };
 
     _ = try self.consume(.open_paren);
     const args = try arguments(self);
-    const closing = try self.consume(.close_paren);
-    return .{
-        .fn_invoke = .{
-            .loc = Node.LineInfo {
-                .line = name.source_data.line,
-                .src_start_ndx = name.source_data.index,
-                .src_end_ndx = closing.source_data.index,
-            },
-            .builtin = builtin,
-            .instance = instance,
-            .name = name.data.string.slice,
-            .args = args,
-        }
-    };
+    _ = try self.consume(.close_paren);
+    return .{ .fn_invoke = .{
+        .loc = tokenLoc(name),
+        .builtin = builtin,
+        .instance = instance,
+        .name = name.data.string.slice,
+        .args = args,
+    } };
 }
 
 fn if_statement(self: *Parser) anyerror!Node {
     std.debug.print("parsing if statement\n", .{});
     const if_token = switch (try self.peek()) {
-        .keyword_elif => try self.consume(.keyword_elif),
+        .keyword_elseif => try self.consume(.keyword_elseif),
         else => try self.consume(.keyword_if),
     };
     _ = try self.consume(.open_paren);
@@ -331,10 +272,10 @@ fn if_statement(self: *Parser) anyerror!Node {
     _ = try self.consume(.close_paren);
     _ = try self.consume(.open_brace);
     const if_true = try self.doAlloc(body);
-    const closing = try self.consume(.close_brace);
+    _ = try self.consume(.close_brace);
     var if_false: ?*Node = null;
     switch (try self.peek()) {
-        .keyword_elif => {
+        .keyword_elseif => {
             if_false = try self.doAlloc(if_statement);
         },
         .keyword_else => {
@@ -346,11 +287,7 @@ fn if_statement(self: *Parser) anyerror!Node {
         else => {},
     }
     return .{ .@"if" = .{
-        .loc = LineInfo {
-            .line = if_token.source_data.line,
-            .src_start_ndx = if_token.source_data.index,
-            .src_end_ndx = closing.source_data.index
-        },
+        .loc = tokenLoc(if_token),
         .condition = condition,
         .branch_true = if_true,
         .branch_false = if_false,
@@ -358,51 +295,26 @@ fn if_statement(self: *Parser) anyerror!Node {
 }
 
 fn factor(self: *Parser) !Node {
-    const kind = try self.peek();
+    const kind = self.peek() catch {
+        self.reportError("unexpected end of file in expression", .{});
+        return Parser.Error.UnexpectedEndOfFile;
+    };
     switch (kind) {
         .literal_string => {
             const token = try self.consume(.literal_string);
-            return .{ .string = .{
-                .loc = LineInfo{
-                    .line = token.source_data.line,
-                    .src_start_ndx = token.source_data.index,
-                    .src_end_ndx = token.source_data.index
-                },
-                .data = try self.allocator.dupe(u8, token.data.string.slice)
-            } };
+            return .{ .string = .{ .loc = tokenLoc(token), .data = try self.allocator.dupe(u8, token.data.string.slice) } };
         },
         .literal_bool => {
             const token = try self.consume(.literal_bool);
-            return .{ .bool = .{
-                .loc = LineInfo{
-                    .line = token.source_data.line,
-                    .src_start_ndx = token.source_data.index,
-                    .src_end_ndx = token.source_data.index
-                },
-                .data = token.data.bool
-            } };
+            return .{ .bool = .{ .loc = tokenLoc(token), .data = token.data.bool } };
         },
         .literal_float => {
             const token = try self.consume(.literal_float);
-            return .{ .float = .{
-                .loc = LineInfo{
-                    .line = token.source_data.line,
-                    .src_start_ndx = token.source_data.index,
-                    .src_end_ndx = token.source_data.index
-                },
-                .data = token.data.float
-            } };
+            return .{ .float = .{ .loc = tokenLoc(token), .data = token.data.float } };
         },
         .literal_integer => {
             const token = try self.consume(.literal_integer);
-            return .{ .integer = .{
-                .loc = LineInfo{
-                    .line = token.source_data.line,
-                    .src_start_ndx = token.source_data.index,
-                    .src_end_ndx = token.source_data.index
-                },
-                .data = token.data.integer
-            } };
+            return .{ .integer = .{ .loc = tokenLoc(token), .data = token.data.integer } };
         },
         .open_paren => {
             _ = try self.consume(.open_paren);
@@ -412,16 +324,7 @@ fn factor(self: *Parser) !Node {
         },
         .operator_sub => {
             const token = try self.consume(.operator_sub);
-            const node = try self.doAlloc(factor);
-            return .{ .unary_op = .{
-                .loc = LineInfo{
-                    .line = token.source_data.line,
-                    .src_start_ndx = token.source_data.index,
-                    .src_end_ndx = token.source_data.index
-                },
-                .op = .negate,
-                .rhs = node
-            } };
+            return .{ .unary_op = .{ .loc = tokenLoc(token), .op = .negate, .rhs = try self.doAlloc(factor) } };
         },
         .keyword_fn => return try function_decl(self),
         .identifier, .open_bracket => {
@@ -431,16 +334,7 @@ fn factor(self: *Parser) !Node {
             const open = try self.consume(.open_bracket);
             _ = try self.consume(.close_bracket);
             const expr = try self.doAlloc(expression);
-            return .{
-                .array_of = .{
-                    .loc = .{
-                        .line = open.source_data.line,
-                        .src_start_ndx = open.source_data.index,
-                        .src_end_ndx = expr.lineinfo().src_end_ndx,
-                    },
-                    .element_type = expr,
-                }
-            };
+            return .{ .array_of = .{ .loc = tokenLoc(open), .element_type = expr } };
         },
         .keyword_type => {
             _ = try self.consume(.keyword_type);
@@ -450,7 +344,7 @@ fn factor(self: *Parser) !Node {
         },
         // idk
         else => {
-            std.log.err("Unhandled factor kind {s}\n", .{@tagName(kind)});
+            self.reportError("unexpected '{s}' in expression", .{@tagName(kind)});
             return Parser.Error.UnexpectedToken;
         },
     }
@@ -518,14 +412,10 @@ fn function_decl(self: *Parser) !Node {
 
     std.debug.print("Returned function\n", .{});
     return .{ .fn_decl = .{
-        .loc = LineInfo {
-            .line = keyword.source_data.line,
-            .src_start_ndx = keyword.source_data.index,
-            .src_end_ndx = 0,
-        },
+        .loc = tokenLoc(keyword),
         .params = params,
         .return_type = rtype,
-        .body = body_node
+        .body = body_node,
     } };
 }
 
@@ -534,35 +424,26 @@ fn body(self: *Parser) !Node {
     if (try self.peek() == .close_brace) {
         const closing = try self.consume(.close_brace);
         self._i -= 1;
-        return .{ .body = .{ .loc = LineInfo{
-            .line = closing.source_data.line,
-            .src_start_ndx = closing.source_data.index - 1,
-            .src_end_ndx = closing.source_data.index,
-        }, .nodes = &[0]Node{} } };
+        self._i -= 1;
+        return .{ .body = .{ .loc = tokenLoc(closing), .nodes = &[0]Node{} } };
     }
 
     var statements = try std.ArrayList(Node).initCapacity(self.allocator, 4);
     var s = try statement(self);
-    const first = s.lineinfo();
+    const first_loc = s.location();
     try statements.append(self.allocator, s);
 
     while (self._i + 1 < self.tokens.len) {
         if (try self.seek(-1) != .close_brace)
             _ = try self.consume(.semicolon);
-        if (try self.peek() == .close_brace) {
-            break;
-        }
+        if (try self.peek() == .close_brace) break;
         s = try statement(self);
         try statements.append(self.allocator, s);
     }
 
     return .{ .body = .{
-        .loc = LineInfo {
-            .line = first.line,
-            .src_start_ndx = first.src_start_ndx,
-            .src_end_ndx = s.lineinfo().src_end_ndx,
-        },
-        .nodes = try statements.toOwnedSlice(self.allocator)
+        .loc = first_loc,
+        .nodes = try statements.toOwnedSlice(self.allocator),
     } };
 }
 
@@ -571,11 +452,7 @@ fn parameter(self: *Parser) !Node.FnDecl.Param {
     _ = try self.consume(.colon);
     const typ = try self.doAlloc(expression);
     return .{
-        .loc = LineInfo {
-            .line = name.source_data.line,
-            .src_start_ndx = name.source_data.index,
-            .src_end_ndx = typ.lineinfo().src_end_ndx,
-        },
+        .loc = tokenLoc(name),
         .name = try self.allocator.dupe(u8, name.data.string.slice),
         .type = typ,
     };
@@ -606,11 +483,6 @@ fn term(self: *Parser) !Node {
         const rhs = try self.doAlloc(factor);
 
         node = .{ .binary_op = .{
-            .loc = .{
-                .line = 0,
-                .src_start_ndx = 0,
-                .src_end_ndx = 0,
-            },
             .lhs = try self.alloc(lhs),
             .op = op_kind,
             .rhs = rhs,
@@ -642,11 +514,6 @@ fn expression(self: *Parser) anyerror!Node {
         const lhs = node;
         const rhs = try self.doAlloc(term);
         node = .{ .binary_op = .{
-            .loc = .{
-                .line = 0,
-                .src_start_ndx = 0,
-                .src_end_ndx = 0
-            },
             .lhs = try self.alloc(lhs),
             .op = op_kind,
             .rhs = rhs,
@@ -790,6 +657,43 @@ test "parse if statement" {
     const stmt = fun.body.body.nodes[0];
     try expect(stmt == .@"if");
     try expect(stmt.@"if".condition.* == .integer);
+}
+
+test "parse if-else" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const node = try lexAndParse(alloc, "pub var f = fn()->void { if (1) { return; } else { return; } }");
+    const root_node = node.type_decl;
+    const decl = root_node.fields[0].@"var";
+    const fun = decl.value.fn_decl;
+    const stmt = fun.body.body.nodes[0];
+    try expect(stmt == .@"if");
+    try expect(stmt.@"if".condition.* == .integer);
+    try expect(stmt.@"if".branch_true.* == .body);
+    try expect(stmt.@"if".branch_false != null);
+    try expect(stmt.@"if".branch_false.?.* == .body);
+}
+
+test "parse elseif chain" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const node = try lexAndParse(alloc, "pub var f = fn()->void { if (1) { return; } elseif (2) { return; } else { return; } }");
+    const root_node = node.type_decl;
+    const decl = root_node.fields[0].@"var";
+    const fun = decl.value.fn_decl;
+    const stmt = fun.body.body.nodes[0];
+    try expect(stmt == .@"if");
+    // elif is parsed as a nested if in branch_false
+    const elif = stmt.@"if".branch_false.?;
+    try expect(elif.* == .@"if");
+    try expect(elif.@"if".condition.* == .integer);
+    try expect(elif.@"if".condition.integer.data == 2);
+    // the else is the elif's branch_false
+    try expect(elif.@"if".branch_false != null);
 }
 
 test "parse multiple parameters" {
